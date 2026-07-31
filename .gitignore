@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.local
+
+# Foundry
+out/
+cache/
+broadcast/
+
+# Logs / OS
+*.log
+.DS_Store
