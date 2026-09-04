@@ -1,0 +1,53 @@
+// ABI minimal — hanya fungsi/event yang dipakai backend.
+export const TEKO_ABI = [
+  "function createGroup(uint8 size, uint96 contribution, uint64 cycleLengthSecs, uint96 penaltyPerDay, uint96 exitPenalty, uint96 postPayoutExitPenalty, uint16 reserveBps) returns (uint256 groupId)",
+  "function deposit(uint256 groupId, address member)",
+  "function drawRound(uint256 groupId) returns (address winner)",
+  "function penalize(uint256 groupId, address member)",
+  "function payDebt(uint256 groupId, address member, uint96 amount)",
+  "function exit(uint256 groupId, address member) returns (uint256 refund)",
+  "function replaceMember(uint256 groupId, address oldMember, address newMember)",
+  "function requestPriorityDraw(uint256 groupId, address member, uint96 fee, uint32 extraTickets) returns (uint32 newWeight)",
+  "function propose(uint256 groupId, uint8 kind, address subject, uint64 votingWindowSecs) returns (uint256 id)",
+  "function vote(uint256 groupId, uint256 proposalId, address voter, bool approve)",
+  "function executeProposal(uint256 groupId, uint256 proposalId)",
+  "function forceClose(uint256 groupId)",
+  "function setReputation(address reputation_)",
+  "function groupCount() view returns (uint256)",
+  "function potOf(uint256 groupId) view returns (uint256)",
+  "function isFinished(uint256 groupId) view returns (bool)",
+  "function roster(uint256 groupId) view returns (address[])",
+  "function isMember(uint256 groupId, address member) view returns (bool)",
+  "function hasWon(uint256 groupId, address member) view returns (bool)",
+  "function priorityWeight(uint256 groupId, address member) view returns (uint32)",
+  "function skippedThisRound(uint256 groupId, address member) view returns (bool)",
+  "function groups(uint256) view returns (uint96 contribution, uint8 size, uint8 round, uint8 paidThisRound, uint8 winnersCount, uint8 activeCount, uint8 remainingToWin, bool rosterLocked, bool closed, uint64 cycleLengthSecs, uint64 cycleDeadline, uint96 penaltyPerDay, uint96 exitPenalty, uint96 postPayoutExitPenalty, uint16 reserveBps, uint96 reserveBalance)",
+  "function getMember(uint256 groupId, address member) view returns (tuple(bool registered, bool exited, bool delinquent, bool penalizedThisRound, uint96 balanceOwed, uint64 lastPenalizedAt))",
+  "function getProposal(uint256 groupId, uint256 proposalId) view returns (tuple(uint8 kind, address subject, uint64 deadline, uint32 yesVotes, uint32 noVotes, uint32 requiredYes, bool executed))",
+  "event GroupCreated(uint256 indexed groupId, uint8 size, uint96 contribution)",
+  "event Deposited(uint256 indexed groupId, uint256 indexed round, address indexed member, uint8 paidThisRound)",
+  "event RoundDrawn(uint256 indexed groupId, uint256 indexed round, address indexed winner, uint256 prize, uint256 fee)",
+  "event GroupCompleted(uint256 indexed groupId)",
+  "event Penalized(uint256 indexed groupId, address indexed member, uint256 charge, uint256 balanceOwed)",
+  "event DebtPaid(uint256 indexed groupId, address indexed member, uint256 amount)",
+  "event Exited(uint256 indexed groupId, address indexed member, uint256 refund, uint256 debtCharged)",
+  "event Replaced(uint256 indexed groupId, address indexed oldMember, address indexed newMember)",
+  "event PriorityDrawRequested(uint256 indexed groupId, address indexed member, uint256 fee, uint32 newWeight)",
+  "event ForceClosed(uint256 indexed groupId, uint256 refundPerMember, uint256 eligibleCount)",
+  "event ProposalCreated(uint256 indexed groupId, uint256 indexed proposalId, uint8 kind, address indexed subject)",
+  "event Voted(uint256 indexed groupId, uint256 indexed proposalId, address indexed voter, bool approve)",
+  "event ProposalExecuted(uint256 indexed groupId, uint256 indexed proposalId)",
+];
+
+export const IDRX_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function decimals() view returns (uint8)",
+];
+
+export const REPUTATION_ABI = [
+  "function score(address member) view returns (uint32)",
+  "function record(address member) view returns (tuple(uint32 onTime, uint32 late, uint32 defaulted))",
+];

@@ -1,4 +1,6 @@
 // Konfigurasi terpusat — baca & validasi env sekali di boot.
+import { ethers } from "ethers";
+
 const REQUIRED = [
   "TELEGRAM_BOT_TOKEN",
   "GROQ_API_KEY",
@@ -6,9 +8,10 @@ const REQUIRED = [
   "BSC_TESTNET_RPC",
   "CONTRACT_ADDRESS",
   "IDRX_ADDRESS",
-  "MIDTRANS_SERVER_KEY",
-  "MIDTRANS_PAYMENT_LINK_API",
-  "MASTER_MNEMONIC",
+  "XENDIT_SECRET_KEY",
+  "XENDIT_CALLBACK_TOKEN",
+  "AWS_REGION",
+  "KMS_KEY_ID",
 ];
 
 const missing = REQUIRED.filter((k) => !process.env[k]);
@@ -34,16 +37,30 @@ export const config = {
     privateKey: process.env.TREASURY_PRIVATE_KEY,
     contract: process.env.CONTRACT_ADDRESS,
     idrx: process.env.IDRX_ADDRESS,
+    reputation: process.env.REPUTATION_ADDRESS || "",
     drawGasLimit: BigInt(process.env.DRAW_GAS_LIMIT || "300000"),
     // IDRX = 2 desimal (1 IDRX = Rp1). Rp -> unit token: idr * 100.
     idrxDecimals: 2,
-    // Master seed untuk derive custodial wallet per user (user tak perlu punya wallet).
-    masterMnemonic: process.env.MASTER_MNEMONIC,
+    // Parameter default grup arisan (dipakai kalau user tak menyebutkan sendiri).
+    defaultCycleLengthSecs: BigInt(process.env.DEFAULT_CYCLE_LENGTH_SECS || String(30 * 24 * 3600)), // 30 hari
+    defaultPenaltyPerDayIdr: Number(process.env.DEFAULT_PENALTY_PER_DAY_IDR || "5000"),
+    defaultExitPenaltyIdr: Number(process.env.DEFAULT_EXIT_PENALTY_IDR || "20000"),
+    defaultPostPayoutExitPenaltyIdr: Number(process.env.DEFAULT_POST_PAYOUT_EXIT_PENALTY_IDR || "50000"),
+    defaultReserveBps: Number(process.env.DEFAULT_RESERVE_BPS || "200"), // 2%
+    defaultVotingWindowSecs: BigInt(process.env.DEFAULT_VOTING_WINDOW_SECS || String(3 * 24 * 3600)), // 3 hari
+    // BNB gas top-up yang dikirim ke wallet custodial pemenang sebelum sweep —
+    // wallet custodial tidak pernah pegang BNB sendiri, jadi butuh disponsori
+    // sesaat sebelum bisa menandatangani transfer IDRX balik ke Treasury.
+    sweepGasTopupWei: ethers.parseEther(process.env.SWEEP_GAS_TOPUP_BNB || "0.0006"),
   },
-  midtrans: {
-    serverKey: process.env.MIDTRANS_SERVER_KEY,
-    apiUrl: process.env.MIDTRANS_PAYMENT_LINK_API,
-    isProduction: process.env.MIDTRANS_IS_PRODUCTION === "true",
+  aws: {
+    region: process.env.AWS_REGION,
+    kmsKeyId: process.env.KMS_KEY_ID,
+  },
+  xendit: {
+    secretKey: process.env.XENDIT_SECRET_KEY,
+    callbackToken: process.env.XENDIT_CALLBACK_TOKEN,
+    isProduction: process.env.XENDIT_IS_PRODUCTION === "true",
   },
   fee: {
     convenienceIdr: Number(process.env.CONVENIENCE_FEE_IDR || "2500"),
@@ -54,7 +71,7 @@ export const config = {
   },
   webhook: {
     port: Number(process.env.WEBHOOK_PORT || "3000"),
-    // URL publik (mis. ngrok) untuk callbacks.finish Midtrans. Opsional.
+    // URL publik (mis. ngrok) untuk callback/redirect Xendit. Opsional.
     publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
   },
 };

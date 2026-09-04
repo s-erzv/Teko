@@ -1,35 +1,36 @@
 import express from "express";
 import { config } from "./config.js";
-import { verifySignature, isPaid } from "./midtrans.js";
+import { verifyCallbackToken, isPaid, paidAmount } from "./xendit.js";
 import { onPaymentSettled } from "./service.js";
 
-/** Jalankan HTTP server penerima notifikasi Midtrans. */
+/** Jalankan HTTP server penerima notifikasi Xendit. */
 export function startWebhookServer() {
   const app = express();
   app.use(express.json());
 
   app.get("/health", (_req, res) => res.json({ ok: true, service: "teko" }));
 
-  // Midtrans mengirim POST ke sini setelah user membayar.
-  app.post("/midtrans/notification", async (req, res) => {
+  // Xendit mengirim POST ke sini setelah status invoice berubah (mis. lunas).
+  app.post("/xendit/invoice-callback", async (req, res) => {
     const n = req.body || {};
+    const token = req.headers["x-callback-token"];
 
-    if (!verifySignature(n)) {
-      console.warn("[webhook] signature invalid untuk order", n.order_id);
-      return res.status(403).json({ error: "invalid signature" });
+    if (!verifyCallbackToken(token)) {
+      console.warn("[webhook] callback token invalid untuk order", n.external_id);
+      return res.status(403).json({ error: "invalid callback token" });
     }
 
-    // Balas cepat 200 (Midtrans retry kalau lama), proses async.
+    // Balas cepat 200 (Xendit retry kalau lama), proses async.
     res.json({ ok: true });
 
     if (isPaid(n)) {
       try {
-        await onPaymentSettled(n.order_id);
+        await onPaymentSettled(n.external_id, paidAmount(n));
       } catch (e) {
         console.error("[webhook] proses settle gagal:", e.message);
       }
     } else {
-      console.log(`[webhook] order ${n.order_id} status=${n.transaction_status}`);
+      console.log(`[webhook] order ${n.external_id} status=${n.status}`);
     }
   });
 
@@ -40,9 +41,9 @@ export function startWebhookServer() {
 
   const server = app.listen(config.webhook.port, () => {
     console.log(`[webhook] server jalan di :${config.webhook.port}`);
-    console.log(`   Set Payment Notification URL di dashboard Midtrans ke:`);
+    console.log(`   Set Webhook URL di dashboard Xendit (Invoices > Callbacks) ke:`);
     console.log(
-      `   ${config.webhook.publicBaseUrl || "https://<ngrok>"}/midtrans/notification`
+      `   ${config.webhook.publicBaseUrl || "https://<ngrok>"}/xendit/invoice-callback`
     );
   });
   server.on("error", (err) => {

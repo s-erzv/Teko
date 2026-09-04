@@ -22,6 +22,7 @@ const mem = {
   groups: new Map(), // groupId -> {group_id, chat_id, size, contribution_idr, status}
   members: [], // {group_id, telegram_user_id, username, wallet_address}
   payments: new Map(), // order_id -> {order_id, group_id, round, telegram_user_id, amount_idr, fee_idr, status, payment_url, tx_hash}
+  wallets: new Map(), // telegram_user_id -> {telegram_user_id, address, encrypted_key (json), external_address}
 };
 
 // ── Groups ────────────────────────────────────────────────────
@@ -99,6 +100,26 @@ export async function getMembers(groupId) {
   return mem.members.filter((m) => m.group_id === groupId);
 }
 
+/** Cari member lewat @username Telegram (case-insensitive) — dipakai buat
+ *  proposal governance (usul skip/keluarkan @username). Username Telegram
+ *  praktisnya unik, jadi kecocokan pertama di grup itu diambil. */
+export async function getMemberByUsername(groupId, username) {
+  const uname = String(username || "").replace(/^@/, "").toLowerCase();
+  if (!uname) return null;
+  if (sb) {
+    const { data } = await sb
+      .from("members")
+      .select("*")
+      .eq("group_id", groupId)
+      .ilike("username", uname)
+      .limit(1);
+    return data?.[0] || null;
+  }
+  return (
+    mem.members.find((m) => m.group_id === groupId && (m.username || "").toLowerCase() === uname) || null
+  );
+}
+
 export async function getMember(groupId, telegramUserId) {
   if (sb) {
     const { data } = await sb
@@ -142,6 +163,31 @@ export async function updatePayment(orderId, patch) {
     Object.assign(mem.payments.get(orderId), patch);
 }
 
+/**
+ * Klaim 1 baris payment yang masih 'pending' -> 'settled', atomik. Dipakai
+ * biar webhook Xendit yang retry (network blip, dsb) tidak memproses
+ * kredit on-chain dua kali — sama seperti pola compare-and-swap yang dipakai
+ * webhook Xendit-nya Circa (update ... where status = 'pending').
+ * @returns {Promise<object|null>} baris yang berhasil diklaim, atau null
+ *          kalau sudah diklaim request lain / tidak ditemukan.
+ */
+export async function claimPaymentPending(orderId) {
+  if (sb) {
+    const { data } = await sb
+      .from("payments")
+      .update({ status: "settled" })
+      .eq("order_id", orderId)
+      .eq("status", "pending")
+      .select()
+      .maybeSingle();
+    return data || null;
+  }
+  const row = mem.payments.get(orderId);
+  if (!row || row.status !== "pending") return null;
+  row.status = "settled";
+  return row;
+}
+
 /** Set telegram_user_id yang pembayarannya sudah settled di ronde tertentu. */
 export async function getPaidUserIds(groupId, round) {
   if (sb) {
@@ -159,6 +205,74 @@ export async function getPaidUserIds(groupId, round) {
       s.add(String(p.telegram_user_id));
   }
   return s;
+}
+
+// ── Wallets custodial (private key terenkripsi KMS, 1 baris per user) ──
+export async function saveWallet({ telegramUserId, address, encryptedKey }) {
+  const row = {
+    telegram_user_id: String(telegramUserId),
+    address,
+    encrypted_key: encryptedKey, // {encryptedDataKey, iv, ciphertext, authTag} — semua base64
+    external_address: null,
+  };
+  if (sb) {
+    await sb.from("wallets").upsert(row, { onConflict: "telegram_user_id" });
+  } else {
+    mem.wallets.set(row.telegram_user_id, row);
+  }
+  return row;
+}
+
+export async function getWallet(telegramUserId) {
+  if (sb) {
+    const { data } = await sb
+      .from("wallets")
+      .select("*")
+      .eq("telegram_user_id", String(telegramUserId))
+      .limit(1);
+    return data?.[0] || null;
+  }
+  return mem.wallets.get(String(telegramUserId)) || null;
+}
+
+/** Opsional: member daftarin address wallet-nya sendiri (self-custody) —
+ *  kalau diisi, hadiah diteruskan ke sini alih-alih di-cashout via Xendit. */
+export async function setExternalAddress(telegramUserId, address) {
+  if (sb) {
+    await sb.from("wallets").update({ external_address: address }).eq("telegram_user_id", String(telegramUserId));
+  } else {
+    const w = mem.wallets.get(String(telegramUserId));
+    if (w) w.external_address = address;
+  }
+}
+
+// ── Rekening/e-wallet cashout (buat Xendit Payout) ──────────────
+export async function setPayoutDestination(telegramUserId, { channelCode, accountNumber, accountHolderName }) {
+  const row = {
+    telegram_user_id: String(telegramUserId),
+    channel_code: channelCode,
+    account_number: accountNumber,
+    account_holder_name: accountHolderName,
+  };
+  if (sb) {
+    await sb.from("payout_destinations").upsert(row, { onConflict: "telegram_user_id" });
+  } else {
+    mem.payoutDestinations = mem.payoutDestinations || new Map();
+    mem.payoutDestinations.set(row.telegram_user_id, row);
+  }
+}
+
+export async function getPayoutDestination(telegramUserId) {
+  if (sb) {
+    const { data } = await sb
+      .from("payout_destinations")
+      .select("*")
+      .eq("telegram_user_id", String(telegramUserId))
+      .limit(1);
+    return data?.[0] || null;
+  }
+  mem.payoutDestinations = mem.payoutDestinations || new Map();
+  return mem.payoutDestinations.get(String(telegramUserId)) || null;
 }
 
 // ── Pending payout (state percakapan singkat; selalu in-memory) ─

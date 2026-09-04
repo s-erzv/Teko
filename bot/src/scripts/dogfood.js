@@ -1,6 +1,13 @@
 // Dogfood full-flow di level service, lawan BSC Testnet beneran.
-// Melewati UI Telegram & Midtrans — langsung uji: createArisan → settle → draw
+// Melewati UI Telegram & Xendit — langsung uji: createArisan → settle → draw
 // untuk 1 siklus arisan penuh (2 orang, 2 ronde).
+//
+// CATATAN: anggota di sini didaftarkan dengan wallet address hardcode (bukan
+// lewat custodialAddress()/KMS), jadi auto-sweep hadiah di drawWinner() akan
+// gagal-dengan-aman (dicatat sbg error, notifyUser no-op karena setNotifier
+// belum dipanggil) — script tetap lanjut, cuma bagian sweep-nya tidak
+// benar-benar teruji di sini. Untuk uji sweep+Xendit end-to-end, pakai bot
+// beneran (src/index.js) dengan kredensial sandbox.
 import * as svc from "../service.js";
 import * as store from "../store.js";
 import * as chain from "../chain.js";

@@ -9,20 +9,28 @@
 -- ═══════════════════════════════════════════════════════════════
 
 -- 1) Aktifkan RLS di semua tabel
-alter table groups   enable row level security;
-alter table members  enable row level security;
-alter table payments enable row level security;
+alter table groups              enable row level security;
+alter table members             enable row level security;
+alter table payments            enable row level security;
+alter table wallets             enable row level security;
+alter table payout_destinations enable row level security;
 
 -- 2) Paksa RLS berlaku bahkan untuk table owner (pertahanan ekstra)
-alter table groups   force row level security;
-alter table members  force row level security;
-alter table payments force row level security;
+alter table groups              force row level security;
+alter table members             force row level security;
+alter table payments            force row level security;
+alter table wallets             force row level security;
+alter table payout_destinations force row level security;
 
 -- 3) Cabut hak akses langsung anon & authenticated (belt-and-suspenders).
 --    Dengan RLS aktif + tanpa policy permissive, dua role ini otomatis DITOLAK.
-revoke all on groups   from anon, authenticated;
-revoke all on members  from anon, authenticated;
-revoke all on payments from anon, authenticated;
+--    `wallets` PALING kritis di sini — isinya private key terenkripsi tiap
+--    user, jangan pernah ada policy SELECT permisif untuk anon/authenticated.
+revoke all on groups              from anon, authenticated;
+revoke all on members             from anon, authenticated;
+revoke all on payments            from anon, authenticated;
+revoke all on wallets             from anon, authenticated;
+revoke all on payout_destinations from anon, authenticated;
 
 -- CATATAN:
 -- - Backend Teko pakai SUPABASE_SERVICE_KEY (service_role) → bypass RLS → tetap full akses.

@@ -1,12 +1,14 @@
-node_modules/
-.env
-.env.local
-
-# Foundry
+# Foundry (kontrak — repo root)
 out/
 cache/
 broadcast/
+.env
+
+# Bot Node.js hidup di bot/, punya .gitignore sendiri (lihat bot/.gitignore)
 
 # Logs / OS
 *.log
 .DS_Store
+
+# Output tool graphify (lokal, gak perlu di-commit)
+graphify-out/

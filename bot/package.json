@@ -1,8 +1,8 @@
 {
-  "name": "teko",
+  "name": "teko-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Teko — AI Bendahara Virtual untuk Arisan on-chain (Telegram + Groq + BNB Chain)",
+  "description": "Teko — AI Bendahara Virtual untuk Arisan on-chain (Telegram + Groq + BNB Chain). Bot Node.js; kontrak Solidity ada di ../contracts (Foundry project di repo root).",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -11,12 +11,10 @@
     "dev": "node --env-file=.env.local --watch src/index.js",
     "start": "node --env-file=.env.local src/index.js",
     "chain:check": "node --env-file=.env.local src/scripts/check-chain.js",
-    "compile": "forge build",
-    "test:contract": "forge test -vv",
-    "deploy:testnet": "forge script script/Deploy.s.sol:Deploy --rpc-url bscTestnet --broadcast",
-    "node:local": "anvil"
+    "dogfood": "node --env-file=.env.local src/scripts/dogfood.js"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.940.0",
     "@supabase/supabase-js": "^2.110.8",
     "dotenv": "^16.4.7",
     "ethers": "^6.13.4",
