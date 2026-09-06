@@ -1,13 +1,19 @@
 // Dogfood full-flow di level service, lawan BSC Testnet beneran.
-// Melewati UI Telegram & Xendit — langsung uji: createArisan → settle → draw
-// untuk 1 siklus arisan penuh (2 orang, 2 ronde).
+// Melewati UI Telegram & Xendit — langsung uji: createArisan → settle → minta
+// undian → tunggu VRF fulfill → ulang, untuk 1 siklus arisan penuh (2 orang, 2 ronde).
 //
-// CATATAN: anggota di sini didaftarkan dengan wallet address hardcode (bukan
-// lewat custodialAddress()/KMS), jadi auto-sweep hadiah di drawWinner() akan
-// gagal-dengan-aman (dicatat sbg error, notifyUser no-op karena setNotifier
-// belum dipanggil) — script tetap lanjut, cuma bagian sweep-nya tidak
-// benar-benar teruji di sini. Untuk uji sweep+Xendit end-to-end, pakai bot
-// beneran (src/index.js) dengan kredensial sandbox.
+// CATATAN 1: anggota di sini didaftarkan dengan wallet address hardcode (bukan
+// lewat custodialAddress()/KMS), jadi auto-sweep hadiah di handleRoundDrawn()
+// akan gagal-dengan-aman (dicatat sbg error, notifyUser no-op karena
+// setNotifier belum dipanggil) — script tetap lanjut, cuma bagian sweep-nya
+// tidak benar-benar teruji di sini.
+//
+// CATATAN 2: drawRound() sekarang minta randomness Chainlink VRF — pemenang
+// baru diketahui belakangan lewat event RoundDrawn, biasanya 1-3 menit
+// setelah diminta di testnet. Script ini nunggu event itu (dengan timeout)
+// sebelum lanjut ke ronde berikutnya. Kontrak yang dipakai HARUS sudah
+// terdaftar sbg consumer di subscription VRF yang didanai — kalau belum,
+// requestDraw akan revert atau macet nunggu tanpa pernah di-fulfill.
 import * as svc from "../service.js";
 import * as store from "../store.js";
 import * as chain from "../chain.js";
@@ -32,6 +38,19 @@ async function settle(groupId, round, m, idx) {
   await svc.onPaymentSettled(orderId); // → Treasury deposit() on-chain
 }
 
+/** Minta undian & tunggu event RoundDrawn buat groupId ini (timeout 5 menit). */
+function waitForDraw(groupId, timeoutMs = 5 * 60_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout nunggu VRF fulfillment")), timeoutMs);
+    chain.onRoundDrawn((payload) => {
+      if (payload.groupId === groupId) {
+        clearTimeout(timer);
+        resolve(payload);
+      }
+    });
+  });
+}
+
 async function main() {
   line("1) Buat arisan (2 orang, 200rb) — createGroup on-chain");
   const created = await svc.createArisan({ chatId, size: 2, contributionIdr: 200000 });
@@ -46,22 +65,24 @@ async function main() {
   await store.addMember({ groupId, telegramUserId: B.userId, username: B.username, walletAddress: B.wallet });
   console.log("Anggota:", (await store.getMembers(groupId)).map((m) => m.username).join(", "));
 
-  // Jalankan 2 ronde penuh
   for (let round = 1; round <= 2; round++) {
     line(`3.${round}) Ronde ${round}: kedua anggota bayar → deposit on-chain`);
     await settle(groupId, round, A, round);
     await settle(groupId, round, B, round);
     const g = await chain.getGroup(groupId);
-    console.log(`paidThisRound: ${g.paidThisRound}/${g.size} | pot on-chain: Rp${(g.contributionIdr * g.size).toLocaleString("id-ID")}`);
+    console.log(`paidThisRound: ${g.paidThisRound}/${g.activeCount} | pot on-chain: Rp${(g.contributionIdr * g.activeCount).toLocaleString("id-ID")}`);
 
-    line(`4.${round}) Undi pemenang ronde ${round} → drawRound on-chain`);
-    const drawn = await svc.drawWinner({ chatId });
-    console.log(drawn.message.replace(/\[tx.*?\)/g, "").trim());
+    line(`4.${round}) Minta undian ronde ${round} (VRF) → tunggu fulfillment...`);
+    const waiting = waitForDraw(groupId);
+    const requested = await svc.requestDraw({ chatId });
+    console.log(requested.message.replace(/<[^>]+>/g, ""));
+    const drawn = await waiting;
+    console.log(`Pemenang: ${drawn.winner} | hadiah: Rp${drawn.prizeIdr.toLocaleString("id-ID")}`);
   }
 
   line("5) Status akhir");
   const g = await chain.getGroup(groupId);
-  console.log(`finished: ${g.finished} | winnersCount: ${g.winnersCount}/${g.size}`);
+  console.log(`finished: ${g.finished} | winnersCount: ${g.winnersCount}`);
   console.log("\n✅ Dogfood selesai — full flow jalan on-chain.");
   process.exit(0);
 }
