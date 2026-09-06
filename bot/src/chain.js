@@ -38,6 +38,37 @@ function findEvent(receipt, name) {
   return undefined;
 }
 
+/**
+ * Ubah error ethers jadi nama custom error kontrak yang jelas (mis.
+ * "GroupNotFound"), bukan "unknown custom error" mentah.
+ *
+ * ethers v6 OTOMATIS decode custom error pakai ABI kontrak untuk revert yang
+ * kejadian SETELAH transaksi ke-mining, tapi TIDAK untuk revert yang kejadian
+ * di tahap estimateGas (sebelum transaksi dikirim sama sekali) — kasus ini
+ * gagal duluan di level provider (JsonRpcProvider.getRpcError), yang generik
+ * dan gak tau apa-apa soal ABI kontrak kita. Karena hampir semua write call
+ * di sini (deposit/exit/penalize/dst) gagal di tahap estimateGas kalau
+ * bisnis logic-nya nolak, decode manual ini yang bikin pesan error ke user
+ * kebaca jelas, bukan kriptik.
+ */
+export function describeError(e) {
+  const data = e?.data ?? e?.info?.error?.data ?? e?.error?.data;
+  if (data) {
+    try {
+      const parsed = teko.interface.parseError(data);
+      if (parsed) return parsed.name + (parsed.args?.length ? `(${parsed.args.join(", ")})` : "");
+    } catch {
+      /* data ada tapi bukan custom error kontrak ini (mis. revert string polos) -> fallback di bawah */
+    }
+  }
+  return e?.reason || e?.shortMessage || e?.message || String(e);
+}
+
+/** Mode undian: 0 = PerCycle (antrian diacak ulang tiap ronde), 1 = Upfront
+ *  (urutan tetap sekali ditentukan pas aktivasi, ronde berikutnya cair instan). */
+export const DRAW_MODE_PER_CYCLE = 0;
+export const DRAW_MODE_UPFRONT = 1;
+
 /** Buat grup arisan on-chain. Semua parameter Rupiah dalam angka biasa. */
 export async function createGroup({
   size,
@@ -47,6 +78,7 @@ export async function createGroup({
   exitPenaltyIdr = config.chain.defaultExitPenaltyIdr,
   postPayoutExitPenaltyIdr = config.chain.defaultPostPayoutExitPenaltyIdr,
   reserveBps = config.chain.defaultReserveBps,
+  drawMode = DRAW_MODE_PER_CYCLE,
 }) {
   const tx = await teko.createGroup(
     size,
@@ -55,7 +87,8 @@ export async function createGroup({
     idrToUnits(penaltyPerDayIdr),
     idrToUnits(exitPenaltyIdr),
     idrToUnits(postPayoutExitPenaltyIdr),
-    reserveBps
+    reserveBps,
+    drawMode
   );
   const receipt = await tx.wait();
   const args = findEvent(receipt, "GroupCreated");
@@ -70,20 +103,41 @@ export async function deposit(groupId, memberAddress) {
 }
 
 /**
- * Undi pemenang ronde & cairkan. WAJIB pakai gasLimit eksplisit —
- * _random() baca block.prevrandao, jadi estimasi gas != eksekusi (bisa OutOfGas).
+ * MINTA undian ronde via Chainlink VRF — dua tahap. Fungsi ini cuma
+ * mengirim request; pemenang BELUM ditentukan begitu ini resolve.
+ * VRFCoordinator memanggil balik `fulfillRandomWords` on-chain beberapa
+ * blok kemudian, yang barulah memicu event `RoundDrawn` — dengar event itu
+ * lewat `onRoundDrawn()` di bawah, bukan return value fungsi ini.
  */
-export async function drawRound(groupId) {
-  const tx = await teko.drawRound(groupId, { gasLimit: config.chain.drawGasLimit });
+export async function requestDraw(groupId) {
+  // drawRound() sekarang cuma memanggil requestRandomWords() — gas-nya
+  // predictable, gak perlu lagi override manual seperti draw pseudo-random
+  // lama (yang butuh gasLimit eksplisit krn baca block.prevrandao bikin
+  // estimasi gas != eksekusi).
+  const tx = await teko.drawRound(groupId);
   const receipt = await tx.wait();
+  const args = findEvent(receipt, "DrawRequested");
+  return { requestId: args?.requestId ?? null, txHash: receipt.hash };
+}
 
-  const args = findEvent(receipt, "RoundDrawn");
-  return {
-    winner: args?.winner ?? null,
-    prizeIdr: args ? unitsToIdr(args.prize) : 0,
-    feeIdr: args ? unitsToIdr(args.fee) : 0,
-    txHash: receipt.hash,
-  };
+/**
+ * Pasang listener permanen buat event `RoundDrawn` — dipanggil sekali saat
+ * boot (lihat index.js). VRF fulfillment adalah transaksi TERPISAH yang
+ * dikirim Chainlink sendiri (bukan bot), jadi ini satu-satunya cara andal
+ * buat tau kapan & siapa pemenangnya, tidak peduli kapan/dari command mana
+ * `requestDraw` sebelumnya dipanggil.
+ */
+export function onRoundDrawn(handler) {
+  teko.on("RoundDrawn", (groupId, round, winner, prize, fee, event) => {
+    handler({
+      groupId: Number(groupId),
+      round: Number(round),
+      winner,
+      prizeIdr: unitsToIdr(prize),
+      feeIdr: unitsToIdr(fee),
+      txHash: event.log.transactionHash,
+    });
+  });
 }
 
 /** Denda member yang telat setor ronde berjalan. Permissionless di kontrak,
@@ -125,12 +179,58 @@ export async function replaceMember(groupId, oldMemberAddress, newMemberAddress)
   return { txHash: receipt.hash };
 }
 
-/** Beli tiket ekstra di undian ronde berikutnya (adaptasi priority-swap/piauw). */
-export async function requestPriorityDraw(groupId, memberAddress, feeIdr, extraTickets) {
-  const tx = await teko.requestPriorityDraw(groupId, memberAddress, idrToUnits(feeIdr), extraTickets);
+/** Ajukan tukeran posisi GRATIS (saling setuju, gak ada uang) dengan `target`. */
+export async function requestSwap(groupId, requesterAddress, targetAddress) {
+  const tx = await teko.requestSwap(groupId, requesterAddress, targetAddress);
   const receipt = await tx.wait();
-  const args = findEvent(receipt, "PriorityDrawRequested");
-  return { newWeight: args ? Number(args.newWeight) : null, txHash: receipt.hash };
+  return { txHash: receipt.hash };
+}
+
+/** `target` menyetujui tukeran gratis yang diajukan `requester`. */
+export async function acceptSwap(groupId, targetAddress, requesterAddress) {
+  const tx = await teko.acceptSwap(groupId, targetAddress, requesterAddress);
+  const receipt = await tx.wait();
+  return { txHash: receipt.hash };
+}
+
+/**
+ * Tawar posisi `target` seharga `feeIdr` (priority-swap berbayar). Mode
+ * PerCycle: `target` harus posisi terdepan. Mode Upfront: `requester` harus
+ * di posisi lebih belakang dari `target`.
+ */
+export async function requestPrioritySwap(groupId, requesterAddress, targetAddress, feeIdr) {
+  const tx = await teko.requestPrioritySwap(groupId, requesterAddress, targetAddress, idrToUnits(feeIdr));
+  const receipt = await tx.wait();
+  const args = findEvent(receipt, "PrioritySwapRequested");
+  return { feeIdr: args ? unitsToIdr(args.fee) : null, txHash: receipt.hash };
+}
+
+/** `target` menerima tawaran priority-swap — posisi ketuker, fee masuk reserve grup. */
+export async function acceptPrioritySwap(groupId, targetAddress, requesterAddress) {
+  const tx = await teko.acceptPrioritySwap(groupId, targetAddress, requesterAddress);
+  const receipt = await tx.wait();
+  return { txHash: receipt.hash };
+}
+
+/** `target` menolak tawaran priority-swap — fee balik ke Treasury. */
+export async function rejectPrioritySwap(groupId, targetAddress) {
+  const tx = await teko.rejectPrioritySwap(groupId, targetAddress);
+  const receipt = await tx.wait();
+  return { txHash: receipt.hash };
+}
+
+export async function getPriorityBid(groupId, targetAddress) {
+  const bid = await teko.priorityBid(groupId, targetAddress);
+  return { requester: bid.requester, feeIdr: unitsToIdr(bid.fee) };
+}
+
+export async function getPendingSwap(groupId, targetAddress) {
+  return teko.pendingSwap(groupId, targetAddress);
+}
+
+/** Antrian undian aktif (kosong kalau grup belum activated). Indeks 0 = giliran berikutnya. */
+export async function getQueue(groupId) {
+  return teko.queue(groupId);
 }
 
 /** Ajukan proposal governance. kind: 0 = Skip, 1 = Kick. */
@@ -168,7 +268,13 @@ export async function getProposal(groupId, proposalId) {
   };
 }
 
-/** Tutup paksa grup (darurat, owner-only). */
+/** Apakah grup ini sedang menunggu callback VRF (drawRound sudah diminta, belum di-fulfill). */
+export async function hasPendingDraw(groupId) {
+  const id = await teko.pendingRequestId(groupId);
+  return id !== 0n;
+}
+
+/** Tutup paksa grup (darurat, treasury-only). */
 export async function forceClose(groupId) {
   const tx = await teko.forceClose(groupId);
   const receipt = await tx.wait();
@@ -187,6 +293,8 @@ export async function getGroup(groupId) {
     activeCount: Number(g.activeCount),
     remainingToWin: Number(g.remainingToWin),
     rosterLocked: g.rosterLocked,
+    activated: g.activated,
+    drawMode: Number(g.drawMode),
     cycleDeadline: Number(g.cycleDeadline),
     reserveBalanceIdr: unitsToIdr(g.reserveBalance),
     finished,

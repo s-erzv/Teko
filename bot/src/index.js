@@ -3,7 +3,15 @@ import { config, esc } from "./config.js";
 import { parseIntent } from "./ai.js";
 import { setNotifier, flushPendingDMs } from "./notifier.js";
 import { startWebhookServer } from "./webhook.js";
-import { storeMode, getGroupByChat, getPayment, getMemberByUsername } from "./store.js";
+import {
+  storeMode,
+  getGroupByChat,
+  getPayment,
+  getMemberByUsername,
+  setPendingCreation,
+  getPendingCreation,
+  clearPendingCreation,
+} from "./store.js";
 import * as chain from "./chain.js";
 import * as svc from "./service.js";
 
@@ -13,7 +21,25 @@ const isAdmin = (ctx) => config.telegram.adminIds.includes(String(ctx.from?.id))
 
 // Prefilter murah supaya Groq tidak dipanggil di tiap baris obrolan grup.
 const TRIGGER =
-  /\b(arisan|gabung|join|ikut|setor|bayar|undi|acak|status|teko|keluar|utang|denda|prioritas|ganti|setuju|tolak|wallet|usul|skip|kick)\b/i;
+  /\b(arisan|gabung|join|ikut|setor|bayar|undi|acak|status|teko|keluar|utang|denda|prioritas|tawaran|tuker|tukeran|ganti|setuju|tolak|terima|wallet|usul|skip|kick|siklus|upfront)\b/i;
+
+const WELCOME_MESSAGE =
+  "👋 Halo! Aku <b>Teko</b>, bendahara arisan digital — dana ditahan smart contract BNB Chain, " +
+  "pemenang diundi jujur pakai Chainlink VRF, dan kamu gak perlu ribet bikin wallet crypto.\n\n" +
+  "<b>Mulai:</b> di grup, ketik <i>buat arisan 5 orang 200rb</i> (admin) atau <i>gabung</i> (member).\n\n" +
+  "Command lengkap: /help";
+
+const HELP_MESSAGE =
+  "<b>Daftar command Teko</b>\n\n" +
+  "🆕 <i>buat arisan 5 orang 200rb tiap minggu upfront</i> — siklus &amp; cara undi opsional (default: 30 hari, diundi ulang tiap ronde)\n" +
+  "📋 <i>status</i> — lihat progress arisan\n" +
+  "💰 <i>gabung</i> · <i>bayar utang</i>\n" +
+  "🔀 <i>tuker posisi sama @user</i> (gratis) · <i>terima tukeran</i>\n" +
+  "💸 <i>mau prioritas 50rb ke @user</i> (berbayar, tawar posisi) · <i>terima tawaran</i> · <i>tolak tawaran</i>\n" +
+  "🚪 <i>keluar</i> · <i>ganti orang</i> · <i>pakai wallet sendiri 0x...</i>\n" +
+  "🗳️ <i>usul skip @user</i> · <i>usul keluarkan @user</i> · <i>setuju &lt;id&gt;</i> · <i>tolak &lt;id&gt;</i>\n" +
+  "👑 <i>undi</i> (admin)\n\n" +
+  "Ketik /start buat penjelasan lebih lengkap.";
 
 const reply = (ctx, r) =>
   ctx.reply(r.message, {
@@ -57,6 +83,126 @@ async function promptJoinPrivate(ctx) {
   );
 }
 
+// ── Alur tanya-jawab "buat arisan" ─────────────────────────────
+// Kalau pesan pertama udah lengkap (size + setoran + siklus + mode undi),
+// langsung dibikin — jalur cepat buat yang udah tau mau apa. Kalau ada yang
+// belum disebutkan, bot NANYA satu-satu (bukan diam-diam pakai default),
+// per keluhan user: default itu OK tapi harus ditawarkan, bukan ditetapkan sepihak.
+function parseInt10(text) {
+  const m = String(text).match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+function parseRupiah(text) {
+  const t = String(text).toLowerCase();
+  // Satuan nempel langsung ke angka (mis. "200rb", "1.5jt") jadi TIDAK boleh
+  // pakai \b sebelum satuan -- digit dan huruf sama-sama \w, jadi gak ada
+  // word-boundary di antara "200" dan "rb".
+  const withUnit = t.match(/(\d+(?:[.,]\d+)?)\s*(rb|ribu|k|jt|juta)\b/);
+  if (withUnit) {
+    // Ada satuan -> titik/koma di sini pasti desimal, mis. "1.5jt",
+    // bukan pemisah ribuan, jadi JANGAN di-strip sebelum parseFloat.
+    let n = parseFloat(withUnit[1].replace(",", "."));
+    if (["rb", "ribu", "k"].includes(withUnit[2])) n *= 1000;
+    else n *= 1_000_000;
+    return Math.round(n) || null;
+  }
+  // Gak ada satuan -> anggap titik/koma itu pemisah ribuan gaya Rupiah
+  // (mis. "1.000.000"), jadi aman di-strip semua.
+  const numMatch = t.match(/[\d.,]+/);
+  if (!numMatch) return null;
+  const n = parseInt(numMatch[0].replace(/[.,]/g, ""), 10);
+  return n || null;
+}
+
+function parseCycleAnswer(text) {
+  const t = String(text).toLowerCase();
+  if (/default|standar|biasa|terserah|gpp|gapapa/.test(t)) return "default";
+  if (/minggu/.test(t)) return 7;
+  if (/bulan/.test(t)) return 30;
+  return parseInt10(t);
+}
+
+function parseDrawModeAnswer(text) {
+  return /upfront|awal|sekali/i.test(text) ? "upfront" : "percycle";
+}
+
+async function askNextCreationQuestion(ctx, state) {
+  if (!state.size) return ctx.reply("Mau berapa orang yang ikutan arisan ini?");
+  if (!state.contributionIdr) return ctx.reply("Setoran per orang per ronde berapa? (contoh: 200rb)");
+  if (!state.cycleDays) {
+    return ctx.reply(
+      "Siklusnya berapa hari sekali? Ketik jumlah harinya, atau <i>mingguan</i> / <i>bulanan</i> / <i>default</i> (30 hari).",
+      { parse_mode: "HTML" }
+    );
+  }
+  if (!state.drawMode) {
+    return ctx.reply(
+      "Cara undinya gimana?\n· Ketik <i>biasa</i> — antrian diacak ulang tiap ronde (rekomendasi)\n· Ketik <i>upfront</i> — urutan pemenang ditentukan sekali di awal, ronde berikutnya cair instan",
+      { parse_mode: "HTML" }
+    );
+  }
+  clearPendingCreation(ctx.chat.id);
+  await ctx.reply("⏳ Bikin arisan di smart contract BNB Chain, tunggu sebentar ya (biasanya beberapa detik)...");
+  const r = await svc.createArisan({
+    chatId: ctx.chat.id,
+    size: state.size,
+    contributionIdr: state.contributionIdr,
+    cycleDays: state.cycleDays === "default" ? undefined : state.cycleDays,
+    drawMode: state.drawMode,
+  });
+  return ctx.reply(r.message, {
+    parse_mode: "HTML",
+    ...(r.ok && r.groupId ? joinButton(r.groupId) : {}),
+  });
+}
+
+function startCreationFlow(ctx, intent) {
+  const state = {
+    size: intent.size || undefined,
+    contributionIdr: intent.contribution_idr || undefined,
+    cycleDays: intent.cycle_days || undefined,
+    drawMode: intent.draw_mode || undefined,
+  };
+  setPendingCreation(ctx.chat.id, state);
+  return askNextCreationQuestion(ctx, state);
+}
+
+/** @returns {Promise<boolean>} true kalau pesan ini ditangani sbg jawaban alur create_arisan. */
+async function advanceCreationFlow(ctx, text) {
+  const state = getPendingCreation(ctx.chat.id);
+  if (!state) return false;
+
+  if (!state.size) {
+    const n = parseInt10(text);
+    if (!n || n < 2 || n > 50) {
+      await ctx.reply("Jumlah anggota harus 2–50 ya, ketik angkanya aja.");
+      return true;
+    }
+    state.size = n;
+  } else if (!state.contributionIdr) {
+    const n = parseRupiah(text);
+    if (!n || n < 1000) {
+      await ctx.reply("Setoran minimal Rp1.000, contoh: 200rb");
+      return true;
+    }
+    state.contributionIdr = n;
+  } else if (!state.cycleDays) {
+    const days = parseCycleAnswer(text);
+    if (!days) {
+      await ctx.reply("Gak kebaca — ketik jumlah harinya (mis. 7), atau 'mingguan'/'bulanan'/'default'.");
+      return true;
+    }
+    state.cycleDays = days;
+  } else if (!state.drawMode) {
+    state.drawMode = parseDrawModeAnswer(text);
+  }
+
+  setPendingCreation(ctx.chat.id, state);
+  await askNextCreationQuestion(ctx, state);
+  return true;
+}
+
 // ── Commands eksplisit (andal, tanpa AI) ──────────────────────
 bot.start(async (ctx) => {
   const payload = ctx.startPayload || "";
@@ -90,26 +236,11 @@ bot.start(async (ctx) => {
     return ctx.reply(r.message, { parse_mode: "HTML" });
   }
 
-  await ctx.reply(
-    "<b>Teko</b> — bendahara arisan on-chain.\n\n" +
-      "Cukup chat natural, contoh:\n" +
-      "• <i>buat arisan 5 orang 200rb</i>\n" +
-      "• <i>gabung</i> (nggak perlu wallet, tinggal ketik)\n" +
-      "• <i>status</i> · <i>undi</i> (admin)\n" +
-      "• <i>keluar</i> · <i>bayar utang</i> · <i>mau prioritas 50rb</i> · <i>ganti orang</i>\n" +
-      "• <i>usul skip @user</i> / <i>usul keluarkan @user</i> · <i>setuju &lt;id&gt;</i> / <i>tolak &lt;id&gt;</i>\n\n" +
-      "Setoran lewat Invoice Xendit, hadiah cair ke rekening/e-wallet (atau wallet BNB kamu sendiri kalau sudah didaftarkan). Uang ditahan smart contract di BNB Chain, pemenang diundi adil tiap ronde.",
-    { parse_mode: "HTML" }
-  );
+  await ctx.reply(WELCOME_MESSAGE, { parse_mode: "HTML" });
   // Kirim resi/klaim yang tertunda selama user belum pernah /start.
   await flushPendingDMs(ctx.from.id);
 });
-bot.help((ctx) =>
-  ctx.reply(
-    "Ketik: buat arisan / gabung / status / undi (admin) / keluar / bayar utang / mau prioritas <jumlah> / " +
-      "ganti orang / usul skip @user / usul keluarkan @user / setuju <id> / tolak <id> / pakai wallet sendiri 0x..."
-  )
-);
+bot.help((ctx) => ctx.reply(HELP_MESSAGE, { parse_mode: "HTML" }));
 
 bot.command("status", async (ctx) =>
   reply(ctx, await svc.statusArisan({ chatId: ctx.chat.id, isAdmin: isAdmin(ctx) }))
@@ -127,8 +258,7 @@ bot.action("ikut", async (ctx) => {
 
 bot.command("draw", async (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply("Hanya admin yang bisa mengundi.");
-  await ctx.reply("Mengundi pemenang...");
-  reply(ctx, await svc.drawWinner({ chatId: ctx.chat.id }));
+  reply(ctx, await svc.requestDraw({ chatId: ctx.chat.id }));
 });
 
 bot.command("denda", async (ctx) => {
@@ -177,6 +307,10 @@ bot.on("text", async (ctx) => {
     if (payout) return ctx.reply(payout.message, { parse_mode: "HTML" });
   }
 
+  // Jawaban buat alur "buat arisan" yang lagi jalan (mis. cuma ketik "5" atau
+  // "mingguan") gak bakal kena TRIGGER regex, makanya dicek duluan di sini.
+  if (await advanceCreationFlow(ctx, text)) return;
+
   if (!TRIGGER.test(text)) return; // bukan untuk Teko
 
   let intent;
@@ -189,15 +323,25 @@ bot.on("text", async (ctx) => {
   try {
     switch (intent.action) {
       case "create_arisan": {
-        const r = await svc.createArisan({
-          chatId: ctx.chat.id,
-          size: intent.size,
-          contributionIdr: intent.contribution_idr,
-        });
-        return ctx.reply(r.message, {
-          parse_mode: "HTML",
-          ...(r.ok && r.groupId ? joinButton(r.groupId) : {}),
-        });
+        // Semua udah lengkap dari 1 pesan (mis. "arisan 5 orang 200rb tiap
+        // minggu upfront") -> langsung bikin, jalur cepat buat yang udah tau
+        // mau apa. Kalau ada yang belum disebut, TANYA dulu (lihat
+        // startCreationFlow) — jangan diam-diam pakai default.
+        if (intent.size && intent.contribution_idr && intent.cycle_days && intent.draw_mode) {
+          await ctx.reply("⏳ Bikin arisan di smart contract BNB Chain, tunggu sebentar ya (biasanya beberapa detik)...");
+          const r = await svc.createArisan({
+            chatId: ctx.chat.id,
+            size: intent.size,
+            contributionIdr: intent.contribution_idr,
+            cycleDays: intent.cycle_days,
+            drawMode: intent.draw_mode,
+          });
+          return ctx.reply(r.message, {
+            parse_mode: "HTML",
+            ...(r.ok && r.groupId ? joinButton(r.groupId) : {}),
+          });
+        }
+        return startCreationFlow(ctx, intent);
       }
 
       case "join":
@@ -210,10 +354,10 @@ bot.on("text", async (ctx) => {
 
       case "draw":
         if (!isAdmin(ctx)) return ctx.reply("Hanya admin yang bisa mengundi.");
-        await ctx.reply("Mengundi pemenang...");
-        return reply(ctx, await svc.drawWinner({ chatId: ctx.chat.id }));
+        return reply(ctx, await svc.requestDraw({ chatId: ctx.chat.id }));
 
       case "exit":
+        await ctx.reply("⏳ Memproses keluar dari arisan on-chain, tunggu sebentar...");
         return reply(ctx, await svc.exitArisan({ chatId: ctx.chat.id, userId: ctx.from.id }));
 
       case "pay_debt": {
@@ -224,12 +368,32 @@ bot.on("text", async (ctx) => {
 
       case "priority": {
         if (ctx.chat.type !== "private")
-          return ctx.reply("Buka japri bot buat beli tiket prioritas (biar link pembayarannya privat).");
+          return ctx.reply("Buka japri bot buat tawar posisi (biar link pembayarannya privat).");
         return reply(
           ctx,
-          await svc.requestPriority({ chatId: ctx.chat.id, userId: ctx.from.id, feeIdr: intent.fee_idr })
+          await svc.requestPriority({
+            chatId: ctx.chat.id,
+            userId: ctx.from.id,
+            targetUsername: intent.target_username,
+            feeIdr: intent.fee_idr,
+          })
         );
       }
+
+      case "respond_priority":
+        return reply(
+          ctx,
+          await svc.respondPrioritySwap({ chatId: ctx.chat.id, userId: ctx.from.id, accept: Boolean(intent.approve) })
+        );
+
+      case "free_swap":
+        return reply(
+          ctx,
+          await svc.requestFreeSwap({ chatId: ctx.chat.id, userId: ctx.from.id, targetUsername: intent.target_username })
+        );
+
+      case "accept_free_swap":
+        return reply(ctx, await svc.acceptFreeSwap({ chatId: ctx.chat.id, userId: ctx.from.id }));
 
       case "replace": {
         const r = await svc.requestReplace({ chatId: ctx.chat.id, oldUserId: ctx.from.id });
@@ -250,6 +414,7 @@ bot.on("text", async (ctx) => {
         const target = await getMemberByUsername(gid, intent.target_username);
         if (!target) return ctx.reply(`User @${esc(intent.target_username || "")} tidak ditemukan di arisan ini.`, { parse_mode: "HTML" });
         const kind = intent.action === "propose_kick" ? "kick" : "skip";
+        await ctx.reply("⏳ Ajukan proposal on-chain, tunggu sebentar...");
         return reply(
           ctx,
           await svc.proposeGovernance({ chatId: ctx.chat.id, kind, targetUserId: target.telegram_user_id })
@@ -257,6 +422,7 @@ bot.on("text", async (ctx) => {
       }
 
       case "vote":
+        await ctx.reply("⏳ Catat suara on-chain, tunggu sebentar...");
         return reply(
           ctx,
           await svc.castVote({
@@ -271,7 +437,7 @@ bot.on("text", async (ctx) => {
         return ctx.reply(`Komplain dicatat: <i>${esc(intent.text || text)}</i>`, { parse_mode: "HTML" });
 
       case "help":
-        return ctx.reply("Ketik: buat arisan / gabung / status / undi (admin) / keluar / bayar utang / mau prioritas <jumlah> / ganti orang.");
+        return ctx.reply(HELP_MESSAGE, { parse_mode: "HTML" });
 
       default:
         return; // none — diamkan
@@ -303,12 +469,40 @@ async function main() {
 
   console.log(`[store] mode: ${storeMode}`);
 
+  // Pengundi (drawRound) cuma MEMINTA randomness VRF — pemenang beneran
+  // diketahui belakangan lewat event RoundDrawn ini, yang bisa muncul kapan
+  // saja (transaksi terpisah dari Chainlink), bukan pas admin ngetik /undi.
+  chain.onRoundDrawn((payload) => {
+    svc.handleRoundDrawn(payload).catch((e) => console.error("[chain] handleRoundDrawn gagal:", e.message));
+  });
+  console.log("[chain] mendengar event RoundDrawn (VRF fulfillment)...");
+
   startWebhookServer();
+  startDeadlineCron();
 
   // Catatan: bot.launch() di Telegraf v4 baru resolve saat bot STOP, jadi log
   // sukses ditaruh sebelum await (polling sudah aktif begitu launch dipanggil).
   console.log("[bot] Teko online — mendengarkan chat Telegram.");
   await bot.launch();
+}
+
+/**
+ * Cron denda otomatis: jalan di DALAM proses bot yang sama (bukan Supabase
+ * Function/infra terpisah) -- bot ini emang udah harus nyala 24/7 buat
+ * nge-poll Telegram, jadi setInterval sederhana di sini udah cukup, gak
+ * nambah moving part baru. Konsekuensinya: kalau proses bot mati/restart,
+ * sweep-nya ikut berhenti sampai proses hidup lagi (sama kayak semua fitur
+ * lain di bot ini) -- bukan masalah asal proses dijaga tetap jalan (mis.
+ * lewat pm2/systemd), tapi BEDA kalau nanti dipisah ke instance idle-aware
+ * (mis. serverless) yang bisa "tidur"; di situ baru Supabase Scheduled
+ * Function/pg_cron lebih pas karena jalannya independen dari proses bot.
+ */
+function startDeadlineCron() {
+  const intervalMs = config.cron.deadlineSweepIntervalMs;
+  setInterval(() => {
+    svc.sweepAllDeadlines().catch((e) => console.error("[cron] sweepAllDeadlines gagal:", e.message));
+  }, intervalMs);
+  console.log(`[cron] sweep deadline tiap ${Math.round(intervalMs / 60000)} menit.`);
 }
 
 process.once("SIGINT", () => bot.stop("SIGINT"));

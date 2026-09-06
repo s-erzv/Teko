@@ -11,7 +11,8 @@
     "dev": "node --env-file=.env.local --watch src/index.js",
     "start": "node --env-file=.env.local src/index.js",
     "chain:check": "node --env-file=.env.local src/scripts/check-chain.js",
-    "dogfood": "node --env-file=.env.local src/scripts/dogfood.js"
+    "dogfood": "node --env-file=.env.local src/scripts/dogfood.js",
+    "verify": "node --env-file=.env.verify.local src/scripts/verify_all.js"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.940.0",

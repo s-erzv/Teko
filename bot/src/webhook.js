@@ -17,7 +17,9 @@ export function startWebhookServer() {
 
     if (!verifyCallbackToken(token)) {
       console.warn("[webhook] callback token invalid untuk order", n.external_id);
-      return res.status(403).json({ error: "invalid callback token" });
+      // 401 (bukan 403) -> samain sama verifyWebhookToken() punya Circa:
+      // ini soal kredensial invalid, bukan soal larangan akses.
+      return res.status(401).json({ error: "unauthorized" });
     }
 
     // Balas cepat 200 (Xendit retry kalau lama), proses async.

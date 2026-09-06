@@ -17,6 +17,18 @@ const sb = useSupabase
 
 export const storeMode = useSupabase ? "supabase" : "in-memory";
 
+/**
+ * supabase-js TIDAK melempar exception buat error query (mis. tabel belum
+ * dibuat) — dia balikin {data, error} dan diam-diam lanjut kalau errornya
+ * gak dicek. Ini pernah bikin createArisan() KELIHATAN sukses (on-chain
+ * beneran jalan) padahal baris `groups`-nya gak pernah kesimpen, dan baru
+ * ketauan belakangan pas join gagal nyari grup yang "gak ada". Helper ini
+ * mastiin error Supabase selalu jadi exception yang jelas, bukan senyap.
+ */
+function check(error, context) {
+  if (error) throw new Error(`[store:${context}] ${error.message}`);
+}
+
 // ── Fallback in-memory ────────────────────────────────────────
 const mem = {
   groups: new Map(), // groupId -> {group_id, chat_id, size, contribution_idr, status}
@@ -35,7 +47,8 @@ export async function saveGroup({ groupId, chatId, size, contributionIdr }) {
     status: "collecting",
   };
   if (sb) {
-    await sb.from("groups").upsert(row, { onConflict: "group_id" });
+    const { error } = await sb.from("groups").upsert(row, { onConflict: "group_id" });
+    check(error, "saveGroup");
   } else {
     mem.groups.set(groupId, row);
   }
@@ -44,13 +57,14 @@ export async function saveGroup({ groupId, chatId, size, contributionIdr }) {
 
 export async function getGroupByChat(chatId) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("groups")
       .select("*")
       .eq("chat_id", String(chatId))
       .in("status", ["collecting"])
       .order("group_id", { ascending: false })
       .limit(1);
+    check(error, "getGroupByChat");
     return data?.[0] || null;
   }
   for (const g of [...mem.groups.values()].reverse()) {
@@ -59,17 +73,68 @@ export async function getGroupByChat(chatId) {
   return null;
 }
 
+/**
+ * Cari grup aktif TERBARU tempat `telegramUserId` jadi anggota — dipakai buat
+ * aksi yang dijalankan dari DM (mis. bayar utang, priority-swap) di mana
+ * `ctx.chat.id` adalah chat DM itu sendiri, BUKAN chat grup arisannya, jadi
+ * `getGroupByChat` gak akan pernah ketemu. Kalau user ikut lebih dari 1
+ * arisan aktif, yang paling baru (group_id terbesar) yang dipakai.
+ */
+export async function getActiveGroupForMember(telegramUserId) {
+  if (sb) {
+    const { data: memberRows, error: mErr } = await sb
+      .from("members")
+      .select("group_id")
+      .eq("telegram_user_id", String(telegramUserId));
+    check(mErr, "getActiveGroupForMember:members");
+    const groupIds = (memberRows || []).map((r) => r.group_id);
+    if (!groupIds.length) return null;
+
+    const { data, error } = await sb
+      .from("groups")
+      .select("*")
+      .in("group_id", groupIds)
+      .eq("status", "collecting")
+      .order("group_id", { ascending: false })
+      .limit(1);
+    check(error, "getActiveGroupForMember:groups");
+    return data?.[0] || null;
+  }
+  const myGroupIds = new Set(
+    mem.members.filter((m) => m.telegram_user_id === String(telegramUserId)).map((m) => m.group_id)
+  );
+  for (const g of [...mem.groups.values()].reverse()) {
+    if (g.status === "collecting" && myGroupIds.has(g.group_id)) return g;
+  }
+  return null;
+}
+
+/** Semua grup yang masih berjalan (buat cron sweep deadline) -- bukan grup tunggal. */
+export async function getActiveGroups() {
+  if (sb) {
+    const { data, error } = await sb.from("groups").select("*").eq("status", "collecting");
+    check(error, "getActiveGroups");
+    return data || [];
+  }
+  return [...mem.groups.values()].filter((g) => g.status === "collecting");
+}
+
 export async function getGroupById(groupId) {
   if (sb) {
-    const { data } = await sb.from("groups").select("*").eq("group_id", groupId).limit(1);
+    const { data, error } = await sb.from("groups").select("*").eq("group_id", groupId).limit(1);
+    check(error, "getGroupById");
     return data?.[0] || null;
   }
   return mem.groups.get(groupId) || null;
 }
 
 export async function setGroupStatus(groupId, status) {
-  if (sb) await sb.from("groups").update({ status }).eq("group_id", groupId);
-  else if (mem.groups.has(groupId)) mem.groups.get(groupId).status = status;
+  if (sb) {
+    const { error } = await sb.from("groups").update({ status }).eq("group_id", groupId);
+    check(error, "setGroupStatus");
+  } else if (mem.groups.has(groupId)) {
+    mem.groups.get(groupId).status = status;
+  }
 }
 
 // ── Members ───────────────────────────────────────────────────
@@ -81,7 +146,8 @@ export async function addMember({ groupId, telegramUserId, username, walletAddre
     wallet_address: walletAddress,
   };
   if (sb) {
-    await sb.from("members").upsert(row, { onConflict: "group_id,telegram_user_id" });
+    const { error } = await sb.from("members").upsert(row, { onConflict: "group_id,telegram_user_id" });
+    check(error, "addMember");
   } else {
     const i = mem.members.findIndex(
       (m) => m.group_id === groupId && m.telegram_user_id === String(telegramUserId)
@@ -94,7 +160,8 @@ export async function addMember({ groupId, telegramUserId, username, walletAddre
 
 export async function getMembers(groupId) {
   if (sb) {
-    const { data } = await sb.from("members").select("*").eq("group_id", groupId);
+    const { data, error } = await sb.from("members").select("*").eq("group_id", groupId);
+    check(error, "getMembers");
     return data || [];
   }
   return mem.members.filter((m) => m.group_id === groupId);
@@ -107,12 +174,13 @@ export async function getMemberByUsername(groupId, username) {
   const uname = String(username || "").replace(/^@/, "").toLowerCase();
   if (!uname) return null;
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("members")
       .select("*")
       .eq("group_id", groupId)
       .ilike("username", uname)
       .limit(1);
+    check(error, "getMemberByUsername");
     return data?.[0] || null;
   }
   return (
@@ -122,12 +190,13 @@ export async function getMemberByUsername(groupId, username) {
 
 export async function getMember(groupId, telegramUserId) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("members")
       .select("*")
       .eq("group_id", groupId)
       .eq("telegram_user_id", String(telegramUserId))
       .limit(1);
+    check(error, "getMember");
     return data?.[0] || null;
   }
   return (
@@ -140,27 +209,35 @@ export async function getMember(groupId, telegramUserId) {
 // ── Payments ──────────────────────────────────────────────────
 export async function savePayment(p) {
   const row = { ...p, status: p.status || "pending" };
-  if (sb) await sb.from("payments").upsert(row, { onConflict: "order_id" });
-  else mem.payments.set(row.order_id, row);
+  if (sb) {
+    const { error } = await sb.from("payments").upsert(row, { onConflict: "order_id" });
+    check(error, "savePayment");
+  } else {
+    mem.payments.set(row.order_id, row);
+  }
   return row;
 }
 
 export async function getPayment(orderId) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("payments")
       .select("*")
       .eq("order_id", orderId)
       .limit(1);
+    check(error, "getPayment");
     return data?.[0] || null;
   }
   return mem.payments.get(orderId) || null;
 }
 
 export async function updatePayment(orderId, patch) {
-  if (sb) await sb.from("payments").update(patch).eq("order_id", orderId);
-  else if (mem.payments.has(orderId))
+  if (sb) {
+    const { error } = await sb.from("payments").update(patch).eq("order_id", orderId);
+    check(error, "updatePayment");
+  } else if (mem.payments.has(orderId)) {
     Object.assign(mem.payments.get(orderId), patch);
+  }
 }
 
 /**
@@ -173,13 +250,14 @@ export async function updatePayment(orderId, patch) {
  */
 export async function claimPaymentPending(orderId) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("payments")
       .update({ status: "settled" })
       .eq("order_id", orderId)
       .eq("status", "pending")
       .select()
       .maybeSingle();
+    check(error, "claimPaymentPending");
     return data || null;
   }
   const row = mem.payments.get(orderId);
@@ -191,12 +269,13 @@ export async function claimPaymentPending(orderId) {
 /** Set telegram_user_id yang pembayarannya sudah settled di ronde tertentu. */
 export async function getPaidUserIds(groupId, round) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("payments")
       .select("telegram_user_id")
       .eq("group_id", groupId)
       .eq("round", round)
       .eq("status", "settled");
+    check(error, "getPaidUserIds");
     return new Set((data || []).map((p) => String(p.telegram_user_id)));
   }
   const s = new Set();
@@ -216,7 +295,8 @@ export async function saveWallet({ telegramUserId, address, encryptedKey }) {
     external_address: null,
   };
   if (sb) {
-    await sb.from("wallets").upsert(row, { onConflict: "telegram_user_id" });
+    const { error } = await sb.from("wallets").upsert(row, { onConflict: "telegram_user_id" });
+    check(error, "saveWallet");
   } else {
     mem.wallets.set(row.telegram_user_id, row);
   }
@@ -225,11 +305,12 @@ export async function saveWallet({ telegramUserId, address, encryptedKey }) {
 
 export async function getWallet(telegramUserId) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("wallets")
       .select("*")
       .eq("telegram_user_id", String(telegramUserId))
       .limit(1);
+    check(error, "getWallet");
     return data?.[0] || null;
   }
   return mem.wallets.get(String(telegramUserId)) || null;
@@ -239,7 +320,11 @@ export async function getWallet(telegramUserId) {
  *  kalau diisi, hadiah diteruskan ke sini alih-alih di-cashout via Xendit. */
 export async function setExternalAddress(telegramUserId, address) {
   if (sb) {
-    await sb.from("wallets").update({ external_address: address }).eq("telegram_user_id", String(telegramUserId));
+    const { error } = await sb
+      .from("wallets")
+      .update({ external_address: address })
+      .eq("telegram_user_id", String(telegramUserId));
+    check(error, "setExternalAddress");
   } else {
     const w = mem.wallets.get(String(telegramUserId));
     if (w) w.external_address = address;
@@ -247,15 +332,16 @@ export async function setExternalAddress(telegramUserId, address) {
 }
 
 // ── Rekening/e-wallet cashout (buat Xendit Payout) ──────────────
-export async function setPayoutDestination(telegramUserId, { channelCode, accountNumber, accountHolderName }) {
+export async function setPayoutDestination(telegramUserId, { channel_code, account_number, account_holder_name }) {
   const row = {
     telegram_user_id: String(telegramUserId),
-    channel_code: channelCode,
-    account_number: accountNumber,
-    account_holder_name: accountHolderName,
+    channel_code,
+    account_number,
+    account_holder_name,
   };
   if (sb) {
-    await sb.from("payout_destinations").upsert(row, { onConflict: "telegram_user_id" });
+    const { error } = await sb.from("payout_destinations").upsert(row, { onConflict: "telegram_user_id" });
+    check(error, "setPayoutDestination");
   } else {
     mem.payoutDestinations = mem.payoutDestinations || new Map();
     mem.payoutDestinations.set(row.telegram_user_id, row);
@@ -264,11 +350,12 @@ export async function setPayoutDestination(telegramUserId, { channelCode, accoun
 
 export async function getPayoutDestination(telegramUserId) {
   if (sb) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("payout_destinations")
       .select("*")
       .eq("telegram_user_id", String(telegramUserId))
       .limit(1);
+    check(error, "getPayoutDestination");
     return data?.[0] || null;
   }
   mem.payoutDestinations = mem.payoutDestinations || new Map();
@@ -286,6 +373,21 @@ export function getPendingPayout(telegramUserId) {
 }
 export function clearPendingPayout(telegramUserId) {
   pendingPayouts.delete(String(telegramUserId));
+}
+
+// ── Alur tanya-jawab "buat arisan" (state percakapan singkat; in-memory) ─
+// Kunci per CHAT (bukan per user) — arisan dibikin buat 1 grup, siapa pun
+// admin di grup itu boleh lanjutin/jawab pertanyaannya.
+const pendingCreations = new Map(); // chat_id -> {step, size, contributionIdr, cycleDays, drawMode}
+
+export function setPendingCreation(chatId, data) {
+  pendingCreations.set(String(chatId), data);
+}
+export function getPendingCreation(chatId) {
+  return pendingCreations.get(String(chatId)) || null;
+}
+export function clearPendingCreation(chatId) {
+  pendingCreations.delete(String(chatId));
 }
 
 // ── Antrean DM (resi/klaim yang gagal terkirim karena user belum /start) ─

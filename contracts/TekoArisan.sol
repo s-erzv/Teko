@@ -1,37 +1,52 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
+import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+
 /**
  * @title TekoArisan
  * @notice Escrow arisan (ROSCA) multi-ronde on-chain untuk BNB Chain.
  *
  *         Alur otentik arisan:
  *           - N anggota, tiap ronde masing-masing setor `contribution`.
- *           - Tiap ronde 1 anggota diundi sebagai pemenang & terima seluruh pot
- *             (99%), owner/developer memotong 1% platform fee.
+ *           - Tiap ronde 1 anggota di ANTRIAN terdepan terima seluruh pot (99%),
+ *             Treasury/developer memotong 1% platform fee.
  *           - Pemenang TIDAK ikut diundi lagi sampai semua kebagian.
  *           - Setelah semua anggota aktif menang tepat 1x → grup selesai.
+ *
+ * @dev Mode undian (drawMode), dipilih sekali saat createGroup — sejajar
+ *      dengan draw_mode di Circa (Stellar):
+ *        - PerCycle (0): antrian sisa DIACAK ULANG tiap kali abis 1 orang
+ *          menang. Cuma posisi TERDEPAN yang "nyata" — makanya priority-swap
+ *          di mode ini cuma boleh menyasar posisi 0.
+ *        - Upfront (1): urutan SELURUH antrian ditentukan SEKALI (pas grup
+ *          teraktivasi — roster penuh & VRF pertama selesai), lalu gak
+ *          diacak lagi sampai grup selesai. Karena posisi manapun "nyata"
+ *          dan permanen, ronde SETELAH aktivasi gak perlu VRF lagi sama
+ *          sekali — drawRound() langsung ambil antrian[0] & cair seketika.
  *
  * @dev Model dana: server (Treasury Wallet) jadi proxy fiat — memanggil `deposit()`
  *      atas nama tiap warga setelah mereka "bayar" Payment Link. Treasury harus sudah
  *      approve token ke kontrak ini.
  *
- * @dev Model otorisasi: sama seperti `deposit()`/`drawRound()` yang sudah ada, setiap
- *      aksi "atas nama member" (penalize, exit, pay_debt, replace, priority-draw,
- *      governance vote) dieksekusi oleh Treasury (`onlyOwner`) atas perintah bot
+ * @dev Model otorisasi: sama seperti `deposit()`/`drawRound()`, setiap aksi
+ *      "atas nama member" dieksekusi Treasury (`onlyTreasury`) atas perintah bot
  *      Telegram — otorisasi "ini beneran keinginan member itu" diverifikasi OFF-CHAIN
- *      lewat identitas Telegram (chat privat, admin check), bukan lewat signature
- *      on-chain milik member sendiri. Ini bukan lubang keamanan baru: `deposit()` dan
- *      `drawRound()` sudah lebih dulu memakai pola ini sejak awal — member custodial
- *      tidak pernah menandatangani transaksi sendiri.
+ *      lewat identitas Telegram, bukan lewat signature on-chain milik member sendiri.
  *
- * @dev Gas: custom errors, storage packing per-slot, immutable, unchecked
- *      pada operasi yang mustahil overflow.
+ * @dev Randomness: Chainlink VRF v2.5. `drawRound()` MEMINTA randomness kalau perlu
+ *      (lihat drawMode di atas) — VRFCoordinator memanggil balik `fulfillRandomWords()`
+ *      beberapa blok kemudian, dan di situlah antrian disusun/diacak & dana cair.
+ *      `RoundDrawn` bisa datang dari transaksi drawRound() itu sendiri (Upfront,
+ *      ronde ke-2 dst) ATAU dari transaksi Chainlink yang terpisah (ronde pertama,
+ *      dan setiap ronde di mode PerCycle) — konsumen off-chain (bot) harus dengar
+ *      event ini, jangan asumsikan selalu sinkron dengan drawRound().
  *
- * @dev Randomness: MVP pakai pseudo-random berbasis block, SAMA seperti draw_order()
- *      di kontrak Circa (Stellar) yang jadi acuan fitur — bukan kelemahan BNB, dua-
- *      duanya sama-sama ditandai "harden ke VRF sebelum mainnet". Untuk produksi
- *      WAJIB ganti `_random()` dengan Chainlink VRF.
+ * @dev Priority-swap di sini diadaptasi jadi SATU tawaran aktif per target (bukan
+ *      lelang multi-penawar kaya Circa) — di teko, fee dibayar via Xendit lalu
+ *      Treasury yang nyetorin ke kontrak (bukan escrow dari wallet member sendiri),
+ *      jadi "refund penawar yang kalah" gak punya padanan off-chain yang bersih.
  */
 
 interface IERC20 {
@@ -45,11 +60,11 @@ interface ITekoReputation {
     function reportDefault(address member) external;
 }
 
-contract TekoArisan {
+contract TekoArisan is VRFConsumerBaseV2Plus {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
-    error NotOwner();
+    error NotTreasury();
     error InvalidParams();
     error GroupNotFound();
     error GroupFinished();
@@ -76,6 +91,16 @@ contract TekoArisan {
     error NotEligibleVoter();
     error ElectorateTooSmall();
     error SubjectNotMember();
+    error DrawAlreadyPending();
+    error UnknownRequest();
+    error NotActivated();
+    error NotInQueue();
+    error CannotSwapSelf();
+    error NoPendingSwap();
+    error SwapTargetMismatch();
+    error PrioritySwapTargetNotFront();
+    error PrioritySwapAlreadyPending();
+    error NoPendingPrioritySwap();
 
     // ---------------------------------------------------------------------
     // Constants & immutables
@@ -84,10 +109,22 @@ contract TekoArisan {
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant MAX_RESERVE_BPS = 1_000;   // cap 10%, sama seperti Circa
     uint256 private constant APPROVAL_BPS = 7_000;      // 70% dari pemilih yang eligible
+    uint8 private constant DRAW_MODE_PER_CYCLE = 0;
+    uint8 private constant DRAW_MODE_UPFRONT = 1;
 
-    address public immutable owner;   // Treasury/developer: penerima fee & satu-satunya tx submitter
-    IERC20 public immutable token;    // IDRX (atau token setoran lain)
-    ITekoReputation public reputation; // opsional, settable oleh owner
+    address public immutable treasury; // Treasury/developer: penerima fee & satu-satunya tx submitter
+    IERC20 public immutable token;      // IDRX (atau token setoran lain)
+    ITekoReputation public reputation;  // opsional, settable oleh treasury
+
+    // ---------------------------------------------------------------------
+    // Konfigurasi Chainlink VRF v2.5 — settable (treasury) buat rotasi
+    // keyHash/subscription tanpa perlu redeploy kontrak.
+    // ---------------------------------------------------------------------
+    bytes32 public keyHash;
+    uint256 public subscriptionId;
+    uint32 public callbackGasLimit = 500_000;
+    uint16 public requestConfirmations = 3;
+    bool public nativePayment = true; // bayar fee VRF pakai BNB native, bukan LINK
 
     // ---------------------------------------------------------------------
     // Storage
@@ -101,7 +138,9 @@ contract TekoArisan {
         uint8  activeCount;    // anggota yang masih wajib setor (size - yang sudah exit)
         uint8  remainingToWin; // anggota aktif yang BELUM pernah menang
         bool   rosterLocked;   // roster terkunci setelah anggota penuh
+        bool   activated;      // antrian awal sudah tersusun (VRF pertama sudah kelar)
         bool   closed;         // selesai (remainingToWin == 0) atau di-force-close
+        uint8  drawMode;       // 0 = PerCycle, 1 = Upfront
         uint64 cycleLengthSecs;
         uint64 cycleDeadline;  // batas waktu setor ronde berjalan; dipakai penalize()
         uint96 penaltyPerDay;  // denda per hari telat
@@ -130,35 +169,57 @@ contract TekoArisan {
         bool    executed;
     }
 
+    struct PriorityBid {
+        address requester;
+        uint96  fee;
+    }
+
     uint256 public groupCount;
     mapping(uint256 => Group) public groups;
+    // Histori LENGKAP semua yang pernah gabung (append-only) — dipakai buat
+    // menyusun antrian awal & menghitung pemilih governance. TIDAK mencerminkan
+    // urutan menang; itu tugas `_queue`.
     mapping(uint256 => address[]) private _roster;
+    // Antrian undian aktif — cuma terisi setelah `activated`. Indeks 0 = giliran
+    // menang berikutnya. Diacak ulang tiap ronde di mode PerCycle; tetap di mode Upfront.
+    mapping(uint256 => address[]) private _queue;
     mapping(uint256 => mapping(address => bool)) public isMember;
     mapping(uint256 => mapping(address => bool)) public hasWon;
     mapping(uint256 => mapping(uint256 => mapping(address => bool))) public paidInRound;
     mapping(uint256 => mapping(address => Member)) public members;
-    // Tiket ekstra di undian berikutnya, dibeli lewat requestPriorityDraw().
-    mapping(uint256 => mapping(address => uint32)) public priorityWeight;
-    // Dilewati sbg kandidat pemenang RONDE INI SAJA (gov_skip) — tetap wajib
-    // setor, cuma ditunda giliran menangnya. Direset tiap kali drawRound() jalan.
-    mapping(uint256 => mapping(address => bool)) public skippedThisRound;
+
+    // Tuker posisi GRATIS, saling setuju (bukan lelang, bukan bayar).
+    mapping(uint256 => mapping(address => address)) public pendingSwap; // groupId => target => requester
+    // Tuker posisi BERBAYAR — satu tawaran aktif per target (lihat catatan
+    // adaptasi di atas kontrak).
+    mapping(uint256 => mapping(address => PriorityBid)) private _priorityBid; // groupId => target => bid
 
     mapping(uint256 => uint256) public nextProposalId;
     mapping(uint256 => mapping(uint256 => Proposal)) public proposals;
     mapping(uint256 => mapping(uint256 => mapping(address => bool))) public hasVoted;
 
+    // VRF: requestId -> groupId, dan groupId -> requestId yang lagi pending
+    // (0 = tidak ada).
+    mapping(uint256 => uint256) public requestIdToGroupId;
+    mapping(uint256 => uint256) public pendingRequestId;
+
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
-    event GroupCreated(uint256 indexed groupId, uint8 size, uint96 contribution);
+    event GroupCreated(uint256 indexed groupId, uint8 size, uint96 contribution, uint8 drawMode);
     event Deposited(uint256 indexed groupId, uint256 indexed round, address indexed member, uint8 paidThisRound);
+    event DrawRequested(uint256 indexed groupId, uint256 indexed round, uint256 indexed requestId);
     event RoundDrawn(uint256 indexed groupId, uint256 indexed round, address indexed winner, uint256 prize, uint256 fee);
     event GroupCompleted(uint256 indexed groupId);
     event Penalized(uint256 indexed groupId, address indexed member, uint256 charge, uint256 balanceOwed);
     event DebtPaid(uint256 indexed groupId, address indexed member, uint256 amount);
     event Exited(uint256 indexed groupId, address indexed member, uint256 refund, uint256 debtCharged);
     event Replaced(uint256 indexed groupId, address indexed oldMember, address indexed newMember);
-    event PriorityDrawRequested(uint256 indexed groupId, address indexed member, uint256 fee, uint32 newWeight);
+    event SwapRequested(uint256 indexed groupId, address indexed requester, address indexed target);
+    event SwapAccepted(uint256 indexed groupId, address indexed requester, address indexed target);
+    event PrioritySwapRequested(uint256 indexed groupId, address indexed requester, address indexed target, uint256 fee);
+    event PrioritySwapAccepted(uint256 indexed groupId, address indexed requester, address indexed target, uint256 fee);
+    event PrioritySwapRejected(uint256 indexed groupId, address indexed requester, address indexed target);
     event ForceClosed(uint256 indexed groupId, uint256 refundPerMember, uint256 eligibleCount);
     event ProposalCreated(uint256 indexed groupId, uint256 indexed proposalId, uint8 kind, address indexed subject);
     event Voted(uint256 indexed groupId, uint256 indexed proposalId, address indexed voter, bool approve);
@@ -167,19 +228,45 @@ contract TekoArisan {
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+    modifier onlyTreasury() {
+        if (msg.sender != treasury) revert NotTreasury();
         _;
     }
 
-    constructor(address token_) {
+    /**
+     * @param token_ token setoran (IDRX)
+     * @param vrfCoordinator_ alamat VRFCoordinatorV2_5 di jaringan ini
+     * @param keyHash_ key hash job VRF yang dipilih (menentukan gas lane)
+     * @param subscriptionId_ ID subscription VRF yang sudah didanai & sudah
+     *        (atau akan) menambahkan kontrak ini sbg consumer
+     */
+    constructor(address token_, address vrfCoordinator_, bytes32 keyHash_, uint256 subscriptionId_)
+        VRFConsumerBaseV2Plus(vrfCoordinator_)
+    {
         if (token_ == address(0)) revert InvalidParams();
-        owner = msg.sender;
+        treasury = msg.sender;
         token = IERC20(token_);
+        keyHash = keyHash_;
+        subscriptionId = subscriptionId_;
     }
 
-    function setReputation(address reputation_) external onlyOwner {
+    function setReputation(address reputation_) external onlyTreasury {
         reputation = ITekoReputation(reputation_);
+    }
+
+    /// @notice Update konfigurasi VRF (rotasi key hash / ganti subscription / tuning gas).
+    function setVrfConfig(
+        bytes32 keyHash_,
+        uint256 subscriptionId_,
+        uint32 callbackGasLimit_,
+        uint16 requestConfirmations_,
+        bool nativePayment_
+    ) external onlyTreasury {
+        keyHash = keyHash_;
+        subscriptionId = subscriptionId_;
+        callbackGasLimit = callbackGasLimit_;
+        requestConfirmations = requestConfirmations_;
+        nativePayment = nativePayment_;
     }
 
     // ---------------------------------------------------------------------
@@ -192,11 +279,13 @@ contract TekoArisan {
         uint96 penaltyPerDay,
         uint96 exitPenalty,
         uint96 postPayoutExitPenalty,
-        uint16 reserveBps
-    ) external onlyOwner returns (uint256 groupId) {
+        uint16 reserveBps,
+        uint8 drawMode
+    ) external onlyTreasury returns (uint256 groupId) {
         if (size < 2 || contribution == 0) revert InvalidParams();
         if (cycleLengthSecs == 0) revert InvalidParams();
         if (reserveBps > MAX_RESERVE_BPS) revert InvalidParams();
+        if (drawMode > DRAW_MODE_UPFRONT) revert InvalidParams();
         unchecked { groupId = ++groupCount; } // mulai dari 1
 
         Group storage g = groups[groupId];
@@ -207,8 +296,9 @@ contract TekoArisan {
         g.exitPenalty = exitPenalty;
         g.postPayoutExitPenalty = postPayoutExitPenalty;
         g.reserveBps = reserveBps;
+        g.drawMode = drawMode;
 
-        emit GroupCreated(groupId, size, contribution);
+        emit GroupCreated(groupId, size, contribution, drawMode);
     }
 
     // ---------------------------------------------------------------------
@@ -270,18 +360,22 @@ contract TekoArisan {
     }
 
     // ---------------------------------------------------------------------
-    // 3) + 4) Undi pemenang ronde & cairkan (1% fee owner, 99% pemenang)
+    // 3) Undi ronde — VRF cuma dipakai kalau BENERAN perlu
     // ---------------------------------------------------------------------
     /**
-     * @notice Setelah semua anggota AKTIF (belum keluar) bayar di ronde ini: undi
-     *         pemenang (di antara yang belum pernah menang, dibobot oleh tiket
-     *         priority-draw), potong 1% fee ke owner, kirim sisanya ke pemenang,
-     *         lalu maju ke ronde berikutnya (atau tandai selesai).
+     * @notice Setelah semua anggota AKTIF bayar ronde ini: cairkan ke antrian
+     *         terdepan. Ronde PERTAMA suatu grup, dan SETIAP ronde di mode
+     *         PerCycle, butuh minta randomness VRF dulu (lihat `DrawRequested`
+     *         + `RoundDrawn` yang menyusul beberapa blok kemudian). Ronde
+     *         KEDUA dst di mode Upfront TIDAK butuh VRF sama sekali — urutan
+     *         sudah tetap sejak aktivasi, jadi cair SEKETIKA di transaksi ini
+     *         (requestId yang dikembalikan = 0 sbg penanda "gak ada VRF").
      */
-    function drawRound(uint256 groupId) external onlyOwner returns (address winner) {
+    function drawRound(uint256 groupId) external onlyTreasury returns (uint256 requestId) {
         Group storage g = groups[groupId];
         if (g.size == 0) revert GroupNotFound();
         if (g.closed) revert GroupClosed();
+        if (pendingRequestId[groupId] != 0) revert DrawAlreadyPending();
         // Roster harus penuh dulu (semua `size` kursi awal pernah setor minimal
         // 1x) sebelum undian boleh jalan — activeCount masih naik selama roster
         // belum terkunci, jadi tanpa gate ini grup bisa keburu diundi dengan
@@ -289,45 +383,117 @@ contract TekoArisan {
         if (!g.rosterLocked) revert RoundNotFunded();
         if (g.paidThisRound != g.activeCount || g.activeCount == 0) revert RoundNotFunded();
 
+        if (g.activated && g.drawMode == DRAW_MODE_UPFRONT) {
+            address winner = _popFront(_queue[groupId]);
+            _finishRound(groupId, g, winner);
+            return 0;
+        }
+
+        requestId = s_vrfCoordinator.requestRandomWords(
+            VRFV2PlusClient.RandomWordsRequest({
+                keyHash: keyHash,
+                subId: subscriptionId,
+                requestConfirmations: requestConfirmations,
+                callbackGasLimit: callbackGasLimit,
+                numWords: 1,
+                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: nativePayment}))
+            })
+        );
+
+        requestIdToGroupId[requestId] = groupId;
+        pendingRequestId[groupId] = requestId;
+
+        emit DrawRequested(groupId, g.round, requestId);
+    }
+
+    /**
+     * @dev Dipanggil VRFCoordinator begitu randomness siap. Kalau grup belum
+     *      `activated`: ini undian PERTAMA — susun seluruh antrian dari
+     *      roster (sekali seumur hidup grup), baru ambil terdepan & cair.
+     *      Kalau sudah `activated` (berarti mode PerCycle, krn Upfront gak
+     *      pernah minta VRF lagi setelah ini): acak ulang SISA antrian, baru
+     *      ambil terdepan & cair.
+     */
+    function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal override {
+        uint256 groupId = requestIdToGroupId[requestId];
+        if (groupId == 0) revert UnknownRequest();
+        delete requestIdToGroupId[requestId];
+        delete pendingRequestId[groupId];
+
+        Group storage g = groups[groupId];
+        address[] storage queue = _queue[groupId];
+
+        if (!g.activated) {
+            address[] storage roster = _roster[groupId];
+            uint256 rlen = roster.length;
+            for (uint256 i; i < rlen; ) {
+                if (!members[groupId][roster[i]].exited) queue.push(roster[i]);
+                unchecked { ++i; }
+            }
+            g.activated = true;
+        }
+        _shuffle(queue, randomWords[0]);
+
+        if (queue.length == 0) revert GroupFinished();
+        address winner = _popFront(queue);
+        _finishRound(groupId, g, winner);
+    }
+
+    /// @dev Fisher-Yates, entropi dari 1 kata VRF diturunkan lagi per-langkah
+    ///      lewat hashing — aman karena seed dasarnya sendiri sudah dari VRF
+    ///      (turunan hash dari sesuatu yang unpredictable tetap unpredictable).
+    function _shuffle(address[] storage arr, uint256 seed) private {
+        uint256 n = arr.length;
+        while (n > 1) {
+            unchecked { n -= 1; }
+            uint256 j = uint256(keccak256(abi.encode(seed, n))) % (n + 1);
+            address tmp = arr[n];
+            arr[n] = arr[j];
+            arr[j] = tmp;
+        }
+    }
+
+    /// @dev O(n) shift-remove dari depan — aman krn ukuran arisan dibatasi kecil (<=50).
+    function _popFront(address[] storage arr) private returns (address front) {
+        front = arr[0];
+        uint256 len = arr.length;
+        for (uint256 i; i < len - 1; ) {
+            arr[i] = arr[i + 1];
+            unchecked { ++i; }
+        }
+        arr.pop();
+    }
+
+    function _queueIndexOf(uint256 groupId, address who) private view returns (uint256 idx, bool found) {
+        address[] storage q = _queue[groupId];
+        uint256 len = q.length;
+        for (uint256 i; i < len; ) {
+            if (q[i] == who) return (i, true);
+            unchecked { ++i; }
+        }
+        return (0, false);
+    }
+
+    function _removeFromQueue(uint256 groupId, address who) private {
+        address[] storage q = _queue[groupId];
+        uint256 len = q.length;
+        for (uint256 i; i < len; ) {
+            if (q[i] == who) {
+                for (uint256 j = i; j < len - 1; ) {
+                    q[j] = q[j + 1];
+                    unchecked { ++j; }
+                }
+                q.pop();
+                return;
+            }
+            unchecked { ++i; }
+        }
+    }
+
+    function _finishRound(uint256 groupId, Group storage g, address winner) private {
         uint256 round = g.round;
-
-        address[] storage list = _roster[groupId];
-        uint256 len = list.length;
-
-        // Bangun kolam terbobot: tiap anggota yang belum menang, belum keluar,
-        // dan tidak di-skip gov ronde ini, muncul (1 + priorityWeight) kali.
-        uint256 poolSize;
-        for (uint256 i; i < len; ) {
-            address a = list[i];
-            if (!hasWon[groupId][a] && !members[groupId][a].exited && !skippedThisRound[groupId][a]) {
-                unchecked { poolSize += 1 + priorityWeight[groupId][a]; }
-            }
-            unchecked { ++i; }
-        }
-        if (poolSize == 0) revert GroupFinished();
-
-        uint256 pick = _random(groupId, round) % poolSize;
-        uint256 seen;
-        for (uint256 i; i < len; ) {
-            address a = list[i];
-            if (!hasWon[groupId][a] && !members[groupId][a].exited && !skippedThisRound[groupId][a]) {
-                uint256 weight = 1 + priorityWeight[groupId][a];
-                if (pick < seen + weight) { winner = a; break; }
-                unchecked { seen += weight; }
-            }
-            unchecked { ++i; }
-        }
-
         hasWon[groupId][winner] = true;
-        priorityWeight[groupId][winner] = 0;
         unchecked { g.remainingToWin -= 1; }
-
-        // Skip cuma berlaku 1 ronde — reset semua flag begitu ronde ini selesai diundi.
-        for (uint256 i; i < len; ) {
-            address a = list[i];
-            if (skippedThisRound[groupId][a]) skippedThisRound[groupId][a] = false;
-            unchecked { ++i; }
-        }
 
         // Hitung pot & fee dari SETORAN RONDE INI (bukan target size tetap) —
         // activeCount sudah dikurangi anggota yang keluar sebelum ronde ini.
@@ -356,7 +522,7 @@ contract TekoArisan {
             _refundReserve(groupId, g);
         }
 
-        if (fee != 0 && !token.transfer(owner, fee)) revert TransferFailed();
+        if (fee != 0 && !token.transfer(treasury, fee)) revert TransferFailed();
         if (!token.transfer(winner, prize)) revert TransferFailed();
     }
 
@@ -404,10 +570,23 @@ contract TekoArisan {
         uint256 round = g.round;
         if (paidInRound[groupId][round][member]) revert AlreadyPaid();
 
-        uint64 chargeFrom = m.lastPenalizedAt > g.cycleDeadline ? m.lastPenalizedAt : g.cycleDeadline;
+        // Dua rezim pembulatan berbeda tergantung ini charge PERTAMA sejak
+        // deadline atau charge LANJUTAN dari charge sebelumnya:
+        //   - Pertama kali (chargeFrom == cycleDeadline): pembulatan ke ATAS —
+        //     telat walau 1 detik tetap ditagih minimal 1 hari.
+        //   - Sudah pernah di-charge sebelumnya (chargeFrom == lastPenalizedAt):
+        //     pembulatan ke BAWAH — cuma hitung hari PENUH yang beneran lewat
+        //     sejak charge terakhir. Ini WAJIB floor, bukan ceiling: di
+        //     blockchain asli tiap panggilan penalize() transaksi TERPISAH
+        //     dengan timestamp masing-masing, jadi elapsed antar panggilan
+        //     nyaris tidak pernah persis 0 detik — ceiling di kedua rezim
+        //     bakal dobel-charge panggilan yang cuma beda beberapa detik.
+        bool alreadyCharged = m.lastPenalizedAt > g.cycleDeadline;
+        uint64 chargeFrom = alreadyCharged ? m.lastPenalizedAt : g.cycleDeadline;
         uint256 elapsed = block.timestamp - chargeFrom;
-        // Ceiling division: telat sedikit pun (>0 detik) tetap ditagih minimal 1 hari.
-        uint256 daysLate = elapsed == 0 ? 0 : (elapsed + 86399) / 86400;
+        uint256 daysLate = alreadyCharged
+            ? elapsed / 86400
+            : (elapsed == 0 ? 0 : (elapsed + 86399) / 86400);
         if (daysLate == 0) revert NothingToCharge();
 
         uint256 charge = uint256(g.penaltyPerDay) * daysLate;
@@ -429,7 +608,7 @@ contract TekoArisan {
      *         Dana ditarik dari SALDO PEMANGGIL (Treasury), sama seperti deposit() —
      *         member membayar via fiat off-chain, Treasury yang menyetorkannya on-chain.
      */
-    function payDebt(uint256 groupId, address member, uint96 amount) external onlyOwner {
+    function payDebt(uint256 groupId, address member, uint96 amount) external onlyTreasury {
         if (amount == 0) revert InvalidParams();
         Group storage g = groups[groupId];
         if (g.size == 0) revert GroupNotFound();
@@ -457,7 +636,7 @@ contract TekoArisan {
      *         bisa dikurangi langsung). Tidak bisa keluar kalau masih punya utang
      *         berjalan — itu harus dilunasi dulu lewat payDebt().
      */
-    function exit(uint256 groupId, address member) external onlyOwner returns (uint256 refund) {
+    function exit(uint256 groupId, address member) external onlyTreasury returns (uint256 refund) {
         Group storage g = groups[groupId];
         if (g.size == 0) revert GroupNotFound();
         Member storage m = members[groupId][member];
@@ -482,6 +661,7 @@ contract TekoArisan {
                 if (refund > 0 && !token.transfer(member, refund)) revert TransferFailed();
             }
             unchecked { g.remainingToWin -= 1; }
+            if (g.activated) _removeFromQueue(groupId, member);
         } else if (g.postPayoutExitPenalty > 0) {
             m.balanceOwed += g.postPayoutExitPenalty;
             m.delinquent = true;
@@ -505,7 +685,7 @@ contract TekoArisan {
      *         Tidak kena postPayoutExitPenalty: total dana grup tetap utuh,
      *         justru itu bahaya yang ingin dicegah penalty tsb.
      */
-    function replaceMember(uint256 groupId, address oldMember, address newMember) external onlyOwner {
+    function replaceMember(uint256 groupId, address oldMember, address newMember) external onlyTreasury {
         if (oldMember == newMember) revert CannotReplaceSelf();
         Group storage g = groups[groupId];
         if (g.size == 0) revert GroupNotFound();
@@ -521,6 +701,10 @@ contract TekoArisan {
             if (list[i] == oldMember) { list[i] = newMember; break; }
             unchecked { ++i; }
         }
+        if (g.activated) {
+            (uint256 idx, bool found) = _queueIndexOf(groupId, oldMember);
+            if (found) _queue[groupId][idx] = newMember;
+        }
 
         hasWon[groupId][newMember] = hasWon[groupId][oldMember];
         uint256 round = g.round;
@@ -528,8 +712,6 @@ contract TekoArisan {
             paidInRound[groupId][round][oldMember] = false;
             paidInRound[groupId][round][newMember] = true;
         }
-        priorityWeight[groupId][newMember] = priorityWeight[groupId][oldMember];
-        priorityWeight[groupId][oldMember] = 0;
 
         members[groupId][newMember].registered = true;
         om.exited = true;
@@ -538,37 +720,104 @@ contract TekoArisan {
     }
 
     // ---------------------------------------------------------------------
-    // 9) Priority-draw — beli tiket ekstra di undian berikutnya
+    // 9) Tuker posisi — gratis (saling setuju) & berbayar (priority-swap)
     // ---------------------------------------------------------------------
+    /// @notice Ajukan tukeran posisi ANTRIAN dengan `target`, gratis. Butuh
+    ///         `target` setuju lewat acceptSwap() — gak ada satu pihak yang
+    ///         bisa maksa pihak lain pindah posisi.
+    function requestSwap(uint256 groupId, address requester, address target) external onlyTreasury {
+        if (requester == target) revert CannotSwapSelf();
+        Group storage g = groups[groupId];
+        if (g.size == 0) revert GroupNotFound();
+        if (!g.activated) revert NotActivated();
+        (, bool foundR) = _queueIndexOf(groupId, requester);
+        (, bool foundT) = _queueIndexOf(groupId, target);
+        if (!foundR || !foundT) revert NotInQueue();
+
+        pendingSwap[groupId][target] = requester;
+        emit SwapRequested(groupId, requester, target);
+    }
+
+    function acceptSwap(uint256 groupId, address target, address requester) external onlyTreasury {
+        address stored = pendingSwap[groupId][target];
+        if (stored == address(0)) revert NoPendingSwap();
+        if (stored != requester) revert SwapTargetMismatch();
+        delete pendingSwap[groupId][target];
+
+        (uint256 idxR, bool foundR) = _queueIndexOf(groupId, requester);
+        (uint256 idxT, bool foundT) = _queueIndexOf(groupId, target);
+        if (!foundR || !foundT) revert NotInQueue();
+
+        address[] storage q = _queue[groupId];
+        (q[idxR], q[idxT]) = (q[idxT], q[idxR]);
+
+        emit SwapAccepted(groupId, requester, target);
+    }
+
     /**
-     * @notice Adaptasi dari priority-swap (piauw) di Circa. Karena teko mengundi
-     *         acak tiap ronde (bukan antrian tetap), "beli posisi lebih dulu"
-     *         diterjemahkan jadi "beli peluang lebih besar": tiap unit fee = 1
-     *         tiket tambahan di undian berikutnya. Fee masuk ke reserve grup
-     *         (dibagi rata ke semua anggota aktif saat grup selesai), bukan ke
-     *         anggota lain langsung.
+     * @notice Tawar posisi `target` dengan `fee` (masuk reserve grup kalau
+     *         diterima). Cuma satu tawaran aktif per target dalam satu waktu
+     *         (bukan lelang) — lihat catatan adaptasi di kepala kontrak.
+     *         Mode PerCycle: `target` WAJIB posisi terdepan (posisi lain
+     *         cuma bakal diacak ulang sebelum sempat kepake). Mode Upfront:
+     *         `requester` WAJIB di posisi lebih belakang dari `target`
+     *         (bayar buat maju, bukan mundur).
      */
-    function requestPriorityDraw(uint256 groupId, address member, uint96 fee, uint32 extraTickets)
+    function requestPrioritySwap(uint256 groupId, address requester, address target, uint96 fee)
         external
-        onlyOwner
-        returns (uint32 newWeight)
+        onlyTreasury
     {
-        if (fee == 0 || extraTickets == 0) revert FeeTooLow();
+        if (requester == target) revert CannotSwapSelf();
+        if (fee == 0) revert FeeTooLow();
         Group storage g = groups[groupId];
         if (g.size == 0) revert GroupNotFound();
         if (g.closed) revert GroupClosed();
-        Member storage m = members[groupId][member];
-        if (!m.registered) revert NotMember();
-        if (m.exited) revert AlreadyExited();
-        if (hasWon[groupId][member]) revert GroupFinished();
+        if (!g.activated) revert NotActivated();
+
+        (uint256 idxR, bool foundR) = _queueIndexOf(groupId, requester);
+        (uint256 idxT, bool foundT) = _queueIndexOf(groupId, target);
+        if (!foundR || !foundT) revert NotInQueue();
+
+        if (g.drawMode == DRAW_MODE_PER_CYCLE) {
+            if (idxT != 0) revert PrioritySwapTargetNotFront();
+        } else if (idxR <= idxT) {
+            revert NotInQueue();
+        }
+
+        if (_priorityBid[groupId][target].fee != 0) revert PrioritySwapAlreadyPending();
 
         if (!token.transferFrom(msg.sender, address(this), fee)) revert TransferFailed();
-        g.reserveBalance += fee;
+        _priorityBid[groupId][target] = PriorityBid({requester: requester, fee: fee});
 
-        newWeight = priorityWeight[groupId][member] + extraTickets;
-        priorityWeight[groupId][member] = newWeight;
+        emit PrioritySwapRequested(groupId, requester, target, fee);
+    }
 
-        emit PriorityDrawRequested(groupId, member, fee, newWeight);
+    function acceptPrioritySwap(uint256 groupId, address target, address requester) external onlyTreasury {
+        PriorityBid memory bid = _priorityBid[groupId][target];
+        if (bid.fee == 0) revert NoPendingPrioritySwap();
+        if (bid.requester != requester) revert SwapTargetMismatch();
+        delete _priorityBid[groupId][target];
+
+        (uint256 idxR, bool foundR) = _queueIndexOf(groupId, requester);
+        (uint256 idxT, bool foundT) = _queueIndexOf(groupId, target);
+        if (!foundR || !foundT) revert NotInQueue();
+
+        address[] storage q = _queue[groupId];
+        (q[idxR], q[idxT]) = (q[idxT], q[idxR]);
+
+        Group storage g = groups[groupId];
+        g.reserveBalance += bid.fee;
+
+        emit PrioritySwapAccepted(groupId, requester, target, bid.fee);
+    }
+
+    /// @notice `target` nolak tawaran — fee balik ke Treasury (yang nyetorinnya).
+    function rejectPrioritySwap(uint256 groupId, address target) external onlyTreasury {
+        PriorityBid memory bid = _priorityBid[groupId][target];
+        if (bid.fee == 0) revert NoPendingPrioritySwap();
+        delete _priorityBid[groupId][target];
+        if (!token.transfer(treasury, bid.fee)) revert TransferFailed();
+        emit PrioritySwapRejected(groupId, bid.requester, target);
     }
 
     // ---------------------------------------------------------------------
@@ -583,7 +832,7 @@ contract TekoArisan {
      */
     function propose(uint256 groupId, uint8 kind, address subject, uint64 votingWindowSecs)
         external
-        onlyOwner
+        onlyTreasury
         returns (uint256 id)
     {
         if (kind > 1) revert InvalidParams();
@@ -611,7 +860,7 @@ contract TekoArisan {
         emit ProposalCreated(groupId, id, kind, subject);
     }
 
-    function vote(uint256 groupId, uint256 proposalId, address voter, bool approve) external onlyOwner {
+    function vote(uint256 groupId, uint256 proposalId, address voter, bool approve) external onlyTreasury {
         Proposal storage p = proposals[groupId][proposalId];
         if (p.deadline == 0) revert ProposalNotFound();
         if (p.executed) revert AlreadyExecuted();
@@ -653,12 +902,23 @@ contract TekoArisan {
         emit ProposalExecuted(groupId, proposalId);
     }
 
-    /// @dev Skip: anggota dilewati sbg kandidat pemenang RONDE INI SAJA (drawRound
-    ///      mengecualikannya dari kolam undian) — tetap wajib setor seperti biasa,
-    ///      cuma giliran menangnya ditunda. Flag ini otomatis reset begitu
-    ///      drawRound() untuk ronde ini selesai dijalankan.
+    /// @dev Skip: pindahkan `subject` ke PALING BELAKANG antrian (kalau sudah
+    ///      activated) — bukan dikeluarkan, cuma ditunda. Sama seperti gov_skip
+    ///      Circa: dampaknya terbatas, sekali paling banyak selisih posisi
+    ///      selebar antrian tersisa. Kalau belum activated, no-op aman (belum
+    ///      ada antrian buat diapa-apain).
     function _govSkip(uint256 groupId, address subject) private {
-        skippedThisRound[groupId][subject] = true;
+        Group storage g = groups[groupId];
+        if (!g.activated) return;
+        (uint256 idx, bool found) = _queueIndexOf(groupId, subject);
+        if (!found) return;
+        address[] storage q = _queue[groupId];
+        uint256 len = q.length;
+        for (uint256 i = idx; i < len - 1; ) {
+            q[i] = q[i + 1];
+            unchecked { ++i; }
+        }
+        q[len - 1] = subject;
     }
 
     function _govKick(uint256 groupId, address subject) private {
@@ -676,6 +936,7 @@ contract TekoArisan {
                 if (!token.transfer(subject, g.contribution)) revert TransferFailed();
             }
             unchecked { g.remainingToWin -= 1; }
+            if (g.activated) _removeFromQueue(groupId, subject);
         }
         m.exited = true;
         unchecked { g.activeCount -= 1; }
@@ -704,9 +965,9 @@ contract TekoArisan {
     }
 
     // ---------------------------------------------------------------------
-    // 11) Force-close darurat (owner) — sisa dana dibagi pro-rata
+    // 11) Force-close darurat (treasury) — sisa dana dibagi pro-rata
     // ---------------------------------------------------------------------
-    function forceClose(uint256 groupId) external onlyOwner {
+    function forceClose(uint256 groupId) external onlyTreasury {
         Group storage g = groups[groupId];
         if (g.size == 0) revert GroupNotFound();
         if (g.closed) revert GroupClosed();
@@ -752,6 +1013,14 @@ contract TekoArisan {
         return _roster[groupId];
     }
 
+    function queue(uint256 groupId) external view returns (address[] memory) {
+        return _queue[groupId];
+    }
+
+    function priorityBid(uint256 groupId, address target) external view returns (PriorityBid memory) {
+        return _priorityBid[groupId][target];
+    }
+
     function potOf(uint256 groupId) external view returns (uint256) {
         Group storage g = groups[groupId];
         return uint256(g.contribution) * g.activeCount;
@@ -768,25 +1037,5 @@ contract TekoArisan {
 
     function getProposal(uint256 groupId, uint256 proposalId) external view returns (Proposal memory) {
         return proposals[groupId][proposalId];
-    }
-
-    // ---------------------------------------------------------------------
-    // Internal
-    // ---------------------------------------------------------------------
-    /// @dev MVP pseudo-random — sama persis dengan draw_order() di Circa (Stellar).
-    ///      GANTI dengan Chainlink VRF untuk produksi.
-    function _random(uint256 groupId, uint256 round) private view returns (uint256) {
-        return uint256(
-            keccak256(
-                abi.encodePacked(
-                    block.prevrandao,
-                    block.timestamp,
-                    blockhash(block.number - 1),
-                    groupId,
-                    round,
-                    address(this)
-                )
-            )
-        );
     }
 }

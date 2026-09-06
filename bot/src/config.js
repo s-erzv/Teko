@@ -30,7 +30,7 @@ export const config = {
   },
   groq: {
     apiKey: process.env.GROQ_API_KEY,
-    model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    model: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
   },
   chain: {
     rpc: process.env.BSC_TESTNET_RPC,
@@ -38,7 +38,6 @@ export const config = {
     contract: process.env.CONTRACT_ADDRESS,
     idrx: process.env.IDRX_ADDRESS,
     reputation: process.env.REPUTATION_ADDRESS || "",
-    drawGasLimit: BigInt(process.env.DRAW_GAS_LIMIT || "300000"),
     // IDRX = 2 desimal (1 IDRX = Rp1). Rp -> unit token: idr * 100.
     idrxDecimals: 2,
     // Parameter default grup arisan (dipakai kalau user tak menyebutkan sendiri).
@@ -47,6 +46,9 @@ export const config = {
     defaultExitPenaltyIdr: Number(process.env.DEFAULT_EXIT_PENALTY_IDR || "20000"),
     defaultPostPayoutExitPenaltyIdr: Number(process.env.DEFAULT_POST_PAYOUT_EXIT_PENALTY_IDR || "50000"),
     defaultReserveBps: Number(process.env.DEFAULT_RESERVE_BPS || "200"), // 2%
+    // 0 = PerCycle (antrian diacak ulang tiap ronde), 1 = Upfront (urutan tetap
+    // sekali di awal). Lihat contracts/TekoArisan.sol buat penjelasan lengkap.
+    defaultDrawMode: Number(process.env.DEFAULT_DRAW_MODE || "0"),
     defaultVotingWindowSecs: BigInt(process.env.DEFAULT_VOTING_WINDOW_SECS || String(3 * 24 * 3600)), // 3 hari
     // BNB gas top-up yang dikirim ke wallet custodial pemenang sebelum sweep —
     // wallet custodial tidak pernah pegang BNB sendiri, jadi butuh disponsori
@@ -73,6 +75,10 @@ export const config = {
     port: Number(process.env.WEBHOOK_PORT || "3000"),
     // URL publik (mis. ngrok) untuk callback/redirect Xendit. Opsional.
     publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+  },
+  cron: {
+    // Seberapa sering cek deadline semua grup aktif & denda otomatis yang telat.
+    deadlineSweepIntervalMs: Number(process.env.DEADLINE_SWEEP_INTERVAL_MINUTES || "30") * 60_000,
   },
 };
 

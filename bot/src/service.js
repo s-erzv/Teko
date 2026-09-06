@@ -6,21 +6,55 @@ import { custodialAddress, sweepToTreasury, sweepToExternal } from "./wallet.js"
 import { notify, notifyUser } from "./notifier.js";
 
 /**
- * Buat arisan baru on-chain + simpan metadata. Parameter opsional
- * (cycleLengthSecs, penalty, dst) dipakai default dari config kalau tidak
- * disebutkan — lihat contracts/TekoArisan.sol untuk arti tiap parameter.
+ * Cari grup arisan yang relevan buat `userId` — coba dari `chatId` dulu
+ * (kerja normal kalau dipanggil dari chat GRUP), fallback ke grup aktif
+ * terbaru tempat `userId` jadi anggota (kerja kalau dipanggil dari DM, di
+ * mana `chatId` adalah chat DM itu sendiri, bukan chat grup arisannya).
+ */
+async function resolveGroupForUser(chatId, userId) {
+  const byChat = await store.getGroupByChat(chatId);
+  if (byChat) return byChat;
+  return store.getActiveGroupForMember(userId);
+}
+
+/**
+ * Buat arisan baru on-chain + simpan metadata.
+ * @param {object} p
+ * @param {number} [p.cycleDays] siklus (hari per ronde) — kalau gak disebutkan,
+ *        dipakai default dari config DAN disebutkan eksplisit di pesan balasan
+ *        (bukan diam-diam kaya versi sebelumnya).
+ * @param {"percycle"|"upfront"} [p.drawMode] "percycle" (antrian diacak ulang
+ *        tiap ronde, default) atau "upfront" (urutan tetap ditentukan sekali
+ *        di awal — ronde ke-2 dst cair instan tanpa nunggu VRF lagi).
  * @returns {Promise<{ok:boolean, message:string}>}
  */
-export async function createArisan({ chatId, size, contributionIdr }) {
+export async function createArisan({ chatId, size, contributionIdr, cycleDays, drawMode }) {
   if (!size || size < 2 || size > 50)
     return { ok: false, message: "Jumlah anggota harus 2–50 ya. Contoh: <i>arisan 5 orang 200rb</i>." };
   if (!contributionIdr || contributionIdr < 1000)
     return { ok: false, message: "Setoran minimal Rp1.000. Contoh: <i>arisan 5 orang 200rb</i>." };
 
-  const { groupId, txHash } = await chain.createGroup({ size, contributionIdr });
+  const usedDefaultCycle = !cycleDays;
+  const cycleLengthSecs = cycleDays
+    ? BigInt(Math.round(cycleDays * 86400))
+    : config.chain.defaultCycleLengthSecs;
+  const drawModeNum = drawMode === "upfront" ? chain.DRAW_MODE_UPFRONT : chain.DRAW_MODE_PER_CYCLE;
+
+  const { groupId, txHash } = await chain.createGroup({
+    size,
+    contributionIdr,
+    cycleLengthSecs,
+    drawMode: drawModeNum,
+  });
   if (!groupId) return { ok: false, message: "Gagal baca groupId dari transaksi. Coba lagi." };
 
   await store.saveGroup({ groupId, chatId, size, contributionIdr });
+
+  const cycleDaysUsed = Number(cycleLengthSecs) / 86400;
+  const drawModeLabel =
+    drawModeNum === chain.DRAW_MODE_UPFRONT
+      ? "diundi SEKALI di awal (urutan tetap dari ronde 1 sampai selesai)"
+      : "diundi ULANG tiap ronde (antrian diacak lagi tiap abis 1 orang menang)";
 
   return {
     ok: true,
@@ -29,7 +63,8 @@ export async function createArisan({ chatId, size, contributionIdr }) {
       `<b>Arisan #${groupId} dibuat.</b>\n` +
       `• Anggota: ${size} orang\n` +
       `• Setoran: ${rupiah(contributionIdr)}/orang/ronde\n` +
-      `• Pemenang tiap ronde diundi adil (tidak menang 2x)\n\n` +
+      `• Siklus: tiap ${cycleDaysUsed} hari${usedDefaultCycle ? " (default, sebut sendiri kalau mau beda — contoh: <i>arisan 5 orang 200rb tiap minggu</i>)" : ""}\n` +
+      `• Cara undi: ${drawModeLabel}\n\n` +
       `Anggota tekan tombol <b>Ikut Arisan Ini</b> di bawah untuk setor — nggak perlu wallet.\n\n` +
       `<a href="https://testnet.bscscan.com/tx/${txHash}">Lihat transaksi</a>`,
   };
@@ -100,11 +135,12 @@ export async function joinOrPay({ chatId, groupId: gid, userId, username, firstN
  * Dipanggil webhook Xendit saat invoice lunas. Cabang berdasarkan `kind`
  * pembayaran: setoran ronde, bayar utang, atau beli tiket prioritas.
  *
- * `paidAmountIdr` (dari `paid_amount` Xendit) diverifikasi cocok sama yang
- * ditagih SEBELUM kredit apa pun jalan on-chain — sama seperti pengecekan
- * amount-mismatch di webhook Xendit-nya Circa. Klaim baris pending->settled
- * dilakukan atomik (`claimPaymentPending`) supaya webhook yang di-retry
- * Xendit tidak memicu kredit dua kali.
+ * Urutan klaim-dulu-baru-cek-nominal ini sengaja disamain persis sama
+ * webhook Xendit-nya Circa: klaim baris pending->settled dilakukan atomik
+ * (`claimPaymentPending`) DULUAN supaya webhook yang di-retry Xendit gak
+ * bisa lolos dua kali dari race apa pun, baru SETELAH itu nominal yang
+ * beneran dibayar (`paidAmountIdr`, dari `paid_amount` Xendit) diverifikasi
+ * cocok sama yang ditagih sebelum kredit apa pun jalan on-chain.
  */
 export async function onPaymentSettled(orderId, paidAmountIdr) {
   let pay = await store.getPayment(orderId);
@@ -118,6 +154,9 @@ export async function onPaymentSettled(orderId, paidAmountIdr) {
   }
   const oid = pay.order_id;
 
+  const claimed = await store.claimPaymentPending(oid);
+  if (!claimed) return; // sudah diklaim request lain, atau bukan 'pending' -> idempotent no-op
+
   const expected = pay.kind === "contribution" || !pay.kind
     ? (pay.amount_idr || 0) + (pay.fee_idr || 0)
     : pay.amount_idr || 0;
@@ -126,9 +165,6 @@ export async function onPaymentSettled(orderId, paidAmountIdr) {
     await store.updatePayment(oid, { status: "amount_mismatch" });
     return;
   }
-
-  const claimed = await store.claimPaymentPending(oid);
-  if (!claimed) return; // sudah diklaim request lain, atau bukan 'pending' -> idempotent no-op
 
   const kind = pay.kind || "contribution";
   if (kind === "debt") return _settleDebt(pay, oid);
@@ -158,15 +194,24 @@ async function _settleContribution(pay, oid) {
   const group = await store.getGroupById(pay.group_id);
   const chatId = group?.chat_id || null;
 
+  // `activeCount` di kontrak cuma naik pas ada anggota BARU yang pertama
+  // kali setor -- di ronde 1, sebelum semua target anggota pernah gabung,
+  // activeCount < size, jadi kalau dipakai sbg penyebut malah salah nunjukin
+  // "1/1" padahal grupnya buat 2 orang. Sebelum roster kekunci (`rosterLocked`,
+  // yaitu udah ada `size` orang yang PERNAH setor), tampilkan target = size;
+  // sesudahnya (ronde 2+, activeCount = size - yang exit) baru aman pakai activeCount.
+  const target = g.rosterLocked ? g.activeCount : g.size;
+  const isFull = g.rosterLocked && g.paidThisRound === g.activeCount;
+
   const collected = g.paidThisRound * g.contributionIdr;
-  const target = g.activeCount * g.contributionIdr;
+  const targetIdr = target * g.contributionIdr;
 
   let msg =
     `Setoran baru masuk ke <b>pool arisan</b> on-chain.\n` +
-    `Terkumpul: <b>${rupiah(collected)}</b> / ${rupiah(target)}  (${g.paidThisRound}/${g.activeCount} orang)\n` +
+    `Terkumpul: <b>${rupiah(collected)}</b> / ${rupiah(targetIdr)}  (${g.paidThisRound}/${target} orang)\n` +
     `<a href="https://testnet.bscscan.com/tx/${depositTx}">Bukti on-chain</a>`;
-  if (g.paidThisRound === g.activeCount) {
-    msg += `\n\nPool penuh! Admin ketik <b>undi</b> untuk mengundi pemenang ronde ${g.round}.`;
+  if (isFull) {
+    msg += `\n\nPool penuh! Lagi ngundi otomatis pemenang ronde ${g.round}...`;
   }
   if (chatId) await notify(chatId, msg);
 
@@ -176,6 +221,33 @@ async function _settleContribution(pay, oid) {
     `Pembayaran kamu <b>${rupiah(total)}</b> diterima.\n` +
       `Kamu sudah setor Arisan #${pay.group_id} Ronde ${g.round}. Terima kasih.`
   );
+
+  if (isFull) await _autoDraw({ groupId: pay.group_id, round: g.round, chatId });
+}
+
+/**
+ * Dipicu otomatis begitu setoran ronde penuh (lihat `isFull` di atas) --
+ * gak perlu admin ketik "undi" lagi. `hasPendingDraw` tetap dicek biar aman
+ * kalau (secara teori) dua settle jalan hampir bersamaan dan sama-sama
+ * ngelihat kondisi "baru penuh".
+ */
+async function _autoDraw({ groupId, round, chatId }) {
+  try {
+    if (await chain.hasPendingDraw(groupId)) return;
+    const { txHash } = await chain.requestDraw(groupId);
+    if (chatId) {
+      await notify(
+        chatId,
+        `Undian Ronde ${round} Arisan #${groupId} otomatis diminta ke Chainlink VRF — biasanya cair dalam 1-3 menit begitu oracle merespons.\n` +
+          `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti permintaan on-chain</a>`
+      );
+    }
+  } catch (e) {
+    console.error("[settle] auto-undi gagal:", chain.describeError ? chain.describeError(e) : e.message);
+    if (chatId) {
+      await notify(chatId, `Pool penuh tapi undian otomatis gagal diminta — admin bisa ketik <b>undi</b> manual.`);
+    }
+  }
 }
 
 async function _settleDebt(pay, oid) {
@@ -194,14 +266,23 @@ async function _settleDebt(pay, oid) {
 
 async function _settlePriority(pay, oid) {
   try {
-    const r = await chain.requestPriorityDraw(pay.group_id, pay.member_wallet, pay.amount_idr, pay.extra_tickets);
+    const r = await chain.requestPrioritySwap(pay.group_id, pay.member_wallet, pay.target_wallet, pay.amount_idr);
     await store.updatePayment(oid, { tx_hash: r.txHash });
+    const target = await memberByWallet(pay.group_id, pay.target_wallet);
+    const targetLabel = target?.username ? `@${esc(target.username)}` : "orangnya";
     await notifyUser(
       pay.telegram_user_id,
-      `Kamu beli <b>${pay.extra_tickets} tiket ekstra</b> buat undian ronde berikutnya di Arisan #${pay.group_id}. Semoga beruntung!`
+      `Tawaran <b>${rupiah(pay.amount_idr)}</b> buat gantiin posisi ${targetLabel} di Arisan #${pay.group_id} udah diajukan. Nunggu ${targetLabel} terima/tolak.`
     );
+    if (target) {
+      await notifyUser(
+        target.telegram_user_id,
+        `Ada yang nawar <b>${rupiah(pay.amount_idr)}</b> buat gantiin posisi kamu di Arisan #${pay.group_id}.\n` +
+          `Ketik <i>terima tawaran</i> atau <i>tolak tawaran</i> di grup arisan itu.`
+      );
+    }
   } catch (e) {
-    console.error("[settle] requestPriorityDraw gagal:", e.message);
+    console.error("[settle] requestPrioritySwap gagal:", chain.describeError(e));
     await store.updatePayment(oid, { status: "deposit_failed" });
   }
 }
@@ -213,42 +294,72 @@ export async function activeGroupId(chatId) {
 }
 
 /**
- * Undi pemenang ronde berjalan (hanya admin). Begitu menang, hadiah IDRX
- * langsung disapu keluar dari wallet custodial pemenang (ke Treasury, atau ke
- * wallet sendiri kalau member sudah daftar address eksternal) — meminimalkan
- * berapa lama dana beneran nongkrong di wallet yang key-nya dipegang server.
+ * MINTA undian ronde berjalan (hanya admin) — Chainlink VRF, dua tahap.
+ * Fungsi ini cuma mengirim request; siapa yang menang BELUM diketahui saat
+ * fungsi ini selesai. Pemenang, pengumuman ke grup, dan sweep hadiah semua
+ * terjadi belakangan lewat `handleRoundDrawn()`, dipicu event `RoundDrawn`
+ * begitu VRFCoordinator memanggil balik kontrak (lihat index.js: `main()`
+ * mendaftarkan `chain.onRoundDrawn(...)` sekali saat boot).
  */
-export async function drawWinner({ chatId }) {
+export async function requestDraw({ chatId }) {
   const group = await store.getGroupByChat(chatId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
 
   const g = await chain.getGroup(group.group_id);
   if (g.finished) return { ok: false, message: `Arisan #${group.group_id} sudah selesai. 🎉` };
-  if (g.paidThisRound !== g.activeCount)
+  if (await chain.hasPendingDraw(group.group_id))
+    return { ok: false, message: "Undian ronde ini sudah diminta, masih nunggu konfirmasi VRF. Tunggu sebentar." };
+  const target = g.rosterLocked ? g.activeCount : g.size;
+  if (!g.rosterLocked || g.paidThisRound !== g.activeCount)
     return {
       ok: false,
-      message: `Belum semua setor (${g.paidThisRound}/${g.activeCount}). Tunggu semua bayar dulu.`,
+      message: `Belum semua setor (${g.paidThisRound}/${target}). Tunggu semua bayar dulu.`,
     };
 
-  const { winner, prizeIdr, feeIdr, txHash } = await chain.drawRound(group.group_id);
-  const member = await memberByWallet(group.group_id, winner);
-  const who = member?.username ? `@${esc(member.username)}` : `pemenang`;
-
-  const after = await chain.getGroup(group.group_id);
-  if (after.finished) await store.setGroupStatus(group.group_id, "finished");
-
-  if (member) await _handlePrizeSweep({ member, groupId: group.group_id, round: g.round, prizeIdr });
-
+  const { txHash } = await chain.requestDraw(group.group_id);
   return {
     ok: true,
     message:
-      `<b>Pemenang Ronde ${g.round} Arisan #${group.group_id}:</b> ${who}\n` +
-      `• Hadiah: <b>${rupiah(prizeIdr)}</b>\n` +
-      `• Platform fee: ${rupiah(feeIdr)} (1%)\n` +
-      `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>\n\n` +
-      (member ? `${who}, cek <b>japri</b> dari bot buat status pencairan (privat).` : "") +
-      (after.finished ? `\n\nArisan selesai — semua sudah kebagian.` : ``),
+      `Undian Ronde ${g.round} Arisan #${group.group_id} diminta ke Chainlink VRF — biasanya cair dalam ` +
+      `1-3 menit begitu oracle merespons.\n` +
+      `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti permintaan on-chain</a>`,
   };
+}
+
+/**
+ * Dipanggil dari event listener `RoundDrawn` (index.js), begitu VRF fulfill
+ * on-chain — bukan dari command handler manapun. Mengumumkan pemenang ke
+ * grup Telegram yang benar (dicari dari `groupId`) dan memicu sweep hadiah.
+ */
+export async function handleRoundDrawn({ groupId, round, winner, prizeIdr, feeIdr, txHash }) {
+  const group = await store.getGroupById(groupId);
+  const chatId = group?.chat_id || null;
+
+  const member = await memberByWallet(groupId, winner);
+  const who = member?.username ? `@${esc(member.username)}` : `pemenang`;
+
+  const after = await chain.getGroup(groupId);
+  if (after.finished && group) await store.setGroupStatus(groupId, "finished");
+
+  if (member) await _handlePrizeSweep({ member, groupId, round, prizeIdr });
+
+  // Ronde berikutnya (kalau masih ada) udah langsung dibuka di kontrak begitu
+  // `_finishRound` selesai -- gak ada "tombol mulai ronde baru" yang kepencet
+  // siapa pun. Jadi nudge ini SATU-SATUNYA sinyal yang bilang ke anggota
+  // "boleh setor lagi sekarang", makanya digabung ke pesan pemenang.
+  const nextRoundNudge = after.finished
+    ? `\n\nArisan selesai — semua sudah kebagian.`
+    : `\n\nRonde ${round + 1} resmi dibuka — yang belum setor, ketik <b>bayar</b> atau tekan tombol Ikut & Setor lagi ya.`;
+
+  const msg =
+    `<b>Pemenang Ronde ${round} Arisan #${groupId}:</b> ${who}\n` +
+    `• Hadiah: <b>${rupiah(prizeIdr)}</b>\n` +
+    `• Platform fee: ${rupiah(feeIdr)} (1%)\n` +
+    `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>\n\n` +
+    (member ? `${who}, cek <b>japri</b> dari bot buat status pencairan (privat).` : "") +
+    nextRoundNudge;
+
+  if (chatId) await notify(chatId, msg);
 }
 
 async function _handlePrizeSweep({ member, groupId, round, prizeIdr }) {
@@ -346,12 +457,14 @@ export async function statusArisan({ chatId, isAdmin = false }) {
     detail = `\n\n<b>Anggota (khusus admin):</b>\n${roster}`;
   }
 
+  const target = g.rosterLocked ? g.activeCount : g.size;
+
   return {
     ok: true,
     message:
       `<b>Arisan #${group.group_id}</b> — Ronde ${round}\n` +
-      `Setoran ${rupiah(g.contributionIdr)}/orang · Pot ${rupiah(g.contributionIdr * g.activeCount)}\n` +
-      `Sudah bayar: <b>${g.paidThisRound}/${g.activeCount}</b> · Sudah menang: ${g.winnersCount}` +
+      `Setoran ${rupiah(g.contributionIdr)}/orang · Pot ${rupiah(g.contributionIdr * target)}\n` +
+      `Sudah bayar: <b>${g.paidThisRound}/${target}</b> · Sudah menang: ${g.winnersCount}` +
       detail +
       `\n\n` +
       (g.finished ? `Status: <b>SELESAI</b>` : `Status: berjalan`),
@@ -405,7 +518,7 @@ export async function setExternalWallet({ userId, address }) {
 // ---------------------------------------------------------------------
 
 export async function exitArisan({ chatId, userId }) {
-  const group = await store.getGroupByChat(chatId);
+  const group = await resolveGroupForUser(chatId, userId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
   const member = await store.getMember(group.group_id, userId);
   if (!member) return { ok: false, message: "Kamu belum ikut arisan ini." };
@@ -428,12 +541,12 @@ export async function exitArisan({ chatId, userId }) {
         `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>`,
     };
   } catch (e) {
-    return { ok: false, message: `Gagal keluar: ${esc(e.reason || e.shortMessage || e.message)}` };
+    return { ok: false, message: `Gagal keluar: ${esc(chain.describeError(e))}` };
   }
 }
 
 export async function requestPayDebt({ chatId, userId, amountIdr }) {
-  const group = await store.getGroupByChat(chatId);
+  const group = await resolveGroupForUser(chatId, userId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
   const member = await store.getMember(group.group_id, userId);
   if (!member) return { ok: false, message: "Kamu belum ikut arisan ini." };
@@ -468,18 +581,33 @@ export async function requestPayDebt({ chatId, userId, amountIdr }) {
   };
 }
 
-export async function requestPriority({ chatId, userId, feeIdr, tickets = 1 }) {
-  const group = await store.getGroupByChat(chatId);
+/**
+ * Tawar posisi antrian `targetUsername` seharga `feeIdr` — adaptasi priority-
+ * swap (piauw) Circa. Mode PerCycle: target WAJIB posisi terdepan (posisi
+ * lain bakal keburu diacak ulang). Mode Upfront: kamu (requester) WAJIB di
+ * posisi lebih belakang dari target (bayar buat maju, bukan mundur).
+ */
+export async function requestPriority({ chatId, userId, targetUsername, feeIdr }) {
+  const group = await resolveGroupForUser(chatId, userId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
   const member = await store.getMember(group.group_id, userId);
   if (!member) return { ok: false, message: "Kamu belum ikut arisan ini." };
-  if (!feeIdr || feeIdr < 1000) return { ok: false, message: "Sebutkan nominalnya, mis: <i>mau prioritas 50rb</i>." };
+  if (!feeIdr || feeIdr < 1000) return { ok: false, message: "Sebutkan nominalnya, mis: <i>mau prioritas 50rb ke @budi</i>." };
+  if (!targetUsername) return { ok: false, message: "Sebutkan mau gantiin posisi siapa, mis: <i>mau prioritas 50rb ke @budi</i>." };
+
+  const target = await store.getMemberByUsername(group.group_id, targetUsername);
+  if (!target) return { ok: false, message: `User @${esc(targetUsername)} gak ketemu di arisan ini.` };
+  if (String(target.telegram_user_id) === String(userId))
+    return { ok: false, message: "Gak bisa nawar posisi kamu sendiri." };
+
+  const g = await chain.getGroup(group.group_id);
+  if (!g.activated) return { ok: false, message: "Antrian belum ada — tunggu ronde pertama diundi dulu." };
 
   const externalId = `teko-priority-g${group.group_id}-u${userId}-${Date.now().toString(36)}`;
   const { paymentUrl } = await createInvoice({
     externalId,
     grossIdr: feeIdr,
-    description: `Tiket prioritas Arisan #${group.group_id}`,
+    description: `Priority-swap Arisan #${group.group_id}`,
   });
   await store.savePayment({
     order_id: externalId,
@@ -492,14 +620,81 @@ export async function requestPriority({ chatId, userId, feeIdr, tickets = 1 }) {
     status: "pending",
     kind: "priority",
     member_wallet: member.wallet_address,
-    extra_tickets: tickets,
+    target_wallet: target.wallet_address,
   });
 
   return {
     ok: true,
-    message: `Beli ${tickets} tiket ekstra buat undian ronde berikutnya, seharga <b>${rupiah(feeIdr)}</b>. Bayar lewat link ini:`,
+    message: `Tawar posisi @${esc(targetUsername)} seharga <b>${rupiah(feeIdr)}</b>. Bayar lewat link ini:`,
     paymentUrl,
   };
+}
+
+/** Target dari sebuah priority-swap terima/tolak tawaran yang lagi nunggu. */
+export async function respondPrioritySwap({ chatId, userId, accept }) {
+  const group = await resolveGroupForUser(chatId, userId);
+  if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
+  const target = await store.getMember(group.group_id, userId);
+  if (!target) return { ok: false, message: "Kamu belum ikut arisan ini." };
+
+  const bid = await chain.getPriorityBid(group.group_id, target.wallet_address);
+  if (!bid.feeIdr) return { ok: false, message: "Gak ada tawaran yang nunggu jawaban kamu." };
+
+  try {
+    if (accept) {
+      await chain.acceptPrioritySwap(group.group_id, target.wallet_address, bid.requester);
+      return { ok: true, message: `Tawaran <b>${rupiah(bid.feeIdr)}</b> diterima — posisi antrian udah ketuker.` };
+    }
+    await chain.rejectPrioritySwap(group.group_id, target.wallet_address);
+    return { ok: true, message: "Tawaran ditolak. Dana penawar dikembalikan." };
+  } catch (e) {
+    return { ok: false, message: `Gagal memproses: ${esc(chain.describeError(e))}` };
+  }
+}
+
+/** Ajukan tukeran posisi GRATIS (saling setuju, gak ada uang) dengan `targetUsername`. */
+export async function requestFreeSwap({ chatId, userId, targetUsername }) {
+  const group = await resolveGroupForUser(chatId, userId);
+  if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
+  const requester = await store.getMember(group.group_id, userId);
+  if (!requester) return { ok: false, message: "Kamu belum ikut arisan ini." };
+  if (!targetUsername)
+    return { ok: false, message: "Sebutkan mau tuker sama siapa, mis: <i>tuker posisi sama @budi</i>." };
+
+  const target = await store.getMemberByUsername(group.group_id, targetUsername);
+  if (!target) return { ok: false, message: `User @${esc(targetUsername)} gak ketemu di arisan ini.` };
+
+  try {
+    await chain.requestSwap(group.group_id, requester.wallet_address, target.wallet_address);
+  } catch (e) {
+    return { ok: false, message: `Gagal ajukan tukeran: ${esc(chain.describeError(e))}` };
+  }
+
+  await notifyUser(
+    target.telegram_user_id,
+    `@${esc(requester.username || "Seseorang")} ngajak tuker posisi antrian di Arisan #${group.group_id}.\n` +
+      `Ketik <i>terima tukeran</i> di grup arisan itu buat setuju.`
+  );
+  return { ok: true, message: `Ajakan tuker posisi ke @${esc(targetUsername)} udah dikirim, nunggu dia setuju.` };
+}
+
+/** Target dari sebuah ajakan tukeran gratis menyetujuinya. */
+export async function acceptFreeSwap({ chatId, userId }) {
+  const group = await resolveGroupForUser(chatId, userId);
+  if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
+  const target = await store.getMember(group.group_id, userId);
+  if (!target) return { ok: false, message: "Kamu belum ikut arisan ini." };
+
+  const requesterWallet = await chain.getPendingSwap(group.group_id, target.wallet_address);
+  if (!requesterWallet || /^0x0+$/.test(requesterWallet))
+    return { ok: false, message: "Gak ada ajakan tukeran yang nunggu jawaban kamu." };
+
+  try {
+    await chain.acceptSwap(group.group_id, target.wallet_address, requesterWallet);
+  } catch (e) {
+    return { ok: false, message: `Gagal terima tukeran: ${esc(chain.describeError(e))}` };
+  }
+  return { ok: true, message: "Tukeran posisi diterima — posisi kalian udah ketuker." };
 }
 
 /** Anggota lama minta diganti — hasilkan deep-link buat penggantinya buka & konfirmasi. */
@@ -522,7 +717,7 @@ export async function completeReplace({ groupId, oldUserId, newUserId, newUserna
   try {
     await chain.replaceMember(groupId, old.wallet_address, newWallet);
   } catch (e) {
-    return { ok: false, message: `Gagal ganti anggota: ${esc(e.reason || e.shortMessage || e.message)}` };
+    return { ok: false, message: `Gagal ganti anggota: ${esc(chain.describeError(e))}` };
   }
   await store.addMember({ groupId, telegramUserId: newUserId, username: newUsername, walletAddress: newWallet });
 
@@ -541,7 +736,7 @@ export async function proposeGovernance({ chatId, kind, targetUserId }) {
   try {
     result = await chain.propose(group.group_id, kindNum, target.wallet_address);
   } catch (e) {
-    return { ok: false, message: `Gagal ajukan proposal: ${esc(e.reason || e.shortMessage || e.message)}` };
+    return { ok: false, message: `Gagal ajukan proposal: ${esc(chain.describeError(e))}` };
   }
   const label = kind === "kick" ? "keluarkan" : "lewati giliran menang ronde ini";
   return {
@@ -562,7 +757,7 @@ export async function castVote({ chatId, userId, proposalId, approve }) {
   try {
     await chain.vote(group.group_id, proposalId, voter.wallet_address, approve);
   } catch (e) {
-    return { ok: false, message: `Gagal vote: ${esc(e.reason || e.shortMessage || e.message)}` };
+    return { ok: false, message: `Gagal vote: ${esc(chain.describeError(e))}` };
   }
 
   const p = await chain.getProposal(group.group_id, proposalId);
@@ -581,7 +776,26 @@ export async function castVote({ chatId, userId, proposalId, approve }) {
   };
 }
 
-/** Cron/admin: denda semua anggota yang belum setor & sudah lewat deadline ronde ini. */
+/** Denda semua anggota grup `groupId` yang belum setor & sudah lewat deadline ronde ini.
+ *  Dipakai bareng dari command manual (`/denda`) maupun cron sweep otomatis. */
+async function _penalizeGroup(groupId) {
+  const g = await chain.getGroup(groupId);
+  if (!g.cycleDeadline || Date.now() / 1000 <= g.cycleDeadline) return [];
+
+  const members = await store.getMembers(groupId);
+  const results = [];
+  for (const m of members) {
+    try {
+      const r = await chain.penalize(groupId, m.wallet_address);
+      if (r.chargeIdr > 0) results.push(`@${esc(m.username || "member")}: +${rupiah(r.chargeIdr)}`);
+    } catch {
+      /* sudah bayar / sudah keluar / belum ada yg perlu ditagih hari ini -> lewati */
+    }
+  }
+  return results;
+}
+
+/** Command manual admin: `/denda`. */
 export async function penalizeLateMembers({ chatId }) {
   const group = await store.getGroupByChat(chatId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
@@ -589,18 +803,31 @@ export async function penalizeLateMembers({ chatId }) {
   if (!g.cycleDeadline || Date.now() / 1000 <= g.cycleDeadline)
     return { ok: false, message: "Belum lewat deadline ronde ini." };
 
-  const members = await store.getMembers(group.group_id);
-  const results = [];
-  for (const m of members) {
-    try {
-      const r = await chain.penalize(group.group_id, m.wallet_address);
-      if (r.chargeIdr > 0) results.push(`@${esc(m.username || "member")}: +${rupiah(r.chargeIdr)}`);
-    } catch {
-      /* sudah bayar / sudah keluar / belum ada yg perlu ditagih hari ini -> lewati */
-    }
-  }
+  const results = await _penalizeGroup(group.group_id);
   if (!results.length) return { ok: true, message: "Tidak ada yang perlu didenda saat ini." };
   return { ok: true, message: `Denda keterlambatan diterapkan:\n${results.join("\n")}` };
+}
+
+/**
+ * Cron: loop semua grup yang masih berjalan, denda otomatis siapa pun yang
+ * telat lewat deadline ronde -- gak nunggu admin inget ketik `/denda`.
+ * Dipanggil berkala dari `startDeadlineCron()` di index.js.
+ */
+export async function sweepAllDeadlines() {
+  const groups = await store.getActiveGroups();
+  for (const group of groups) {
+    try {
+      const results = await _penalizeGroup(group.group_id);
+      if (results.length && group.chat_id) {
+        await notify(
+          group.chat_id,
+          `⏰ Denda keterlambatan otomatis (Arisan #${group.group_id}, lewat deadline ronde):\n${results.join("\n")}`
+        );
+      }
+    } catch (e) {
+      console.error(`[cron] sweep deadline gagal utk grup ${group.group_id}:`, e.message);
+    }
+  }
 }
 
 async function memberByWallet(groupId, wallet) {

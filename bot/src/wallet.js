@@ -89,9 +89,10 @@ async function custodialSigner(telegramUserId, provider) {
 
 /**
  * Sapu saldo IDRX dari wallet custodial pemenang balik ke Treasury, sesegera
- * mungkin setelah drawRound() — meminimalkan berapa lama hadiah beneran
- * "nongkrong" di wallet yang key-nya dipegang server, sebelum akhirnya
- * dicairkan jadi Rupiah asli lewat Xendit Payout (lihat service.drawWinner).
+ * mungkin setelah event RoundDrawn (VRF fulfillment) — meminimalkan berapa
+ * lama hadiah beneran "nongkrong" di wallet yang key-nya dipegang server,
+ * sebelum akhirnya dicairkan jadi Rupiah asli lewat Xendit Payout (lihat
+ * service.handleRoundDrawn).
  *
  * Wallet custodial tidak pernah pegang BNB sendiri, jadi Treasury nyuntik gas
  * secukupnya dulu (sekali pakai) sebelum wallet itu bisa menandatangani

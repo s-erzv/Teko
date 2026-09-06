@@ -33,10 +33,10 @@ create table if not exists payments (
   amount_idr       bigint not null,             -- nominal on-chain (tanpa convenience fee)
   fee_idr          bigint not null default 0,   -- convenience fee (revenue off-chain)
   member_wallet    text,                        -- dibutuhkan buat kind debt/priority
-  extra_tickets    smallint,                     -- dibutuhkan buat kind priority
+  target_wallet    text,                        -- dibutuhkan buat kind priority (posisi siapa yang ditawar)
   payment_url      text,
   status           text not null default 'pending', -- pending | settled | deposit_failed
-  tx_hash          text,                        -- hash tx on-chain (deposit/payDebt/requestPriorityDraw)
+  tx_hash          text,                        -- hash tx on-chain (deposit/payDebt/requestPrioritySwap)
   created_at       timestamptz not null default now()
 );
 create index if not exists payments_group_round_idx on payments (group_id, round);
