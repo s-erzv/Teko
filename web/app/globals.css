@@ -83,17 +83,20 @@ body {
    persis seperti kain sungguhan. Dibuat dengan gradient, bukan
    gambar, supaya tajam di layar mana pun dan nol beban unduh. */
 .gingham {
-  --gingham-size: 22px;
+  /* Sel HARUS jauh lebih kecil dari tinggi pita. Kalau sel dan pita sama
+     tinggi, cuma satu baris sel yang terlihat dan persilangan dua gradient
+     tidak pernah terbentuk -- hasilnya garis putus-putus, bukan gingham. */
+  --gingham-size: 14px;
   background-color: var(--paper);
   background-image:
     repeating-linear-gradient(
       90deg,
-      rgba(255, 154, 0, 0.55) 0 calc(var(--gingham-size) / 2),
+      rgba(255, 154, 0, 0.68) 0 calc(var(--gingham-size) / 2),
       transparent calc(var(--gingham-size) / 2) var(--gingham-size)
     ),
     repeating-linear-gradient(
       0deg,
-      rgba(255, 154, 0, 0.55) 0 calc(var(--gingham-size) / 2),
+      rgba(255, 154, 0, 0.68) 0 calc(var(--gingham-size) / 2),
       transparent calc(var(--gingham-size) / 2) var(--gingham-size)
     );
 }
@@ -102,7 +105,8 @@ body {
    pita, BUKAN sebagai latar seluruh halaman -- kotak-kotak penuh satu
    layar bikin mata cepat lelah dan teks di atasnya susah dibaca. */
 .gingham-band {
-  height: 22px;
+  /* ~3 baris sel: cukup untuk membaca anyaman kainnya. */
+  height: 44px;
 }
 
 /* ── Kartu ────────────────────────────────────────────────────
