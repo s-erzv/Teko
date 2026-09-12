@@ -1,0 +1,58 @@
+/* ── Token ────────────────────────────────────────────────────
+   Palet summer picnic. Enam warna matahari dipakai untuk permukaan,
+   blok, dan aksen -- TIDAK untuk teks di atas teks. Tidak satu pun
+   dari enam warna itu cukup gelap untuk dijadikan warna teks, jadi
+   --ink ditambahkan: cokelat tua hangat yang masih terasa satu
+   keluarga dengan matahari terbit tapi kebaca.
+
+   Aturan yang dijaga test di web/test/contrast.test.mjs:
+   teks SELALU --ink, tidak pernah putih di atas warna sun-*.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --sun-600: #FF9A00;
+  --sun-500: #FFAD01;
+  --sun-400: #FFBE00;
+  --sun-300: #FFD140;
+  --sun-200: #FFE36E;
+  --sun-100: #FEF58E;
+
+  --ink: #3D2410;
+  --paper: #FFFDF5;
+
+  /* Tinta yang dilemahkan untuk teks sekunder. Tetap di atas ambang
+     karena basisnya --ink, bukan abu-abu netral yang bikin halaman
+     terasa dingin. */
+  --ink-soft: #6B4A2F;
+
+  --radius-card: 20px;
+  --shadow-warm: 0 8px 24px rgba(61, 36, 16, 0.10);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

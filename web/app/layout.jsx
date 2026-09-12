@@ -1,3 +1,5 @@
+import "./globals.css";
+
 export const metadata = {
   title: "Teko — Bendahara Arisan On-Chain",
   description:
