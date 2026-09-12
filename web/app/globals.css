@@ -253,7 +253,10 @@ p {
    ikonnya mengerjakan tugas visual sekaligus tugas struktural. */
 .reasons {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /* Dua kolom di layar lebar, bukan tiga: empat alasan di grid tiga kolom
+     menyisakan satu kartu menggantung sendiri di baris kedua. min() di dalam
+     minmax() menjaga trek tidak pernah melebihi lebar layar di ponsel. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
   gap: 20px;
   margin-top: 32px;
   list-style: none;
@@ -297,4 +300,105 @@ p {
   padding: 0;
   list-style: none;
   font-size: 0.95rem;
+}
+
+/* ── Wordmark ─────────────────────────────────────────────────
+   Bunga matahari + nama, bukan bunga matahari yang mengambang
+   sendiri di atas judul. Satu benda yang bisa dikenali, bukan dua
+   hiasan terpisah. */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  font-size: 1.35rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 28px;
+}
+
+/* ── Taplak sebagai alas kartu ────────────────────────────────
+   Kartu langkah diletakkan DI ATAS taplak, bukan di atas kertas
+   kosong. Ini yang bikin bagian tengah halaman masih terasa piknik:
+   tanpa ini dua bagian tengah jadi dua bentang krem tanpa tema, dan
+   kotak-kotaknya cuma muncul sebagai pita tipis antar bagian.
+   Sel dinaikkan ke 18px karena di bidang seluas ini anyaman 14px
+   terbaca sebagai bintik, bukan kain. */
+.blanket {
+  --gingham-size: 18px;
+  margin-top: 32px;
+  padding: 22px;
+  border: 2px solid var(--ink);
+  border-radius: 28px;
+  box-shadow: var(--shadow-warm);
+}
+
+/* Grid di dalam taplak sudah dijarakkan oleh padding taplaknya. */
+.blanket .steps {
+  margin-top: 0;
+}
+
+/* ── Lompat ke konten ─────────────────────────────────────────
+   Disembunyikan sampai difokus, bukan display:none -- kalau
+   di-none-kan, keyboard tidak akan pernah bisa menemukannya. */
+.skiplink {
+  position: absolute;
+  left: 16px;
+  top: -60px;
+  z-index: 10;
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+  padding: 12px 18px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  transition: top 120ms ease;
+}
+
+.skiplink:focus {
+  top: 16px;
+}
+
+/* ── Pemolesan responsif & gerak ──────────────────────────────
+   Blok reduced-motion di awal berkas cuma memangkas DURASI transisi,
+   jadi tombolnya tetap melompat saat disorot, cuma tanpa animasi --
+   yang justru lebih mengagetkan. Pergeserannya sendiri yang harus
+   ditiadakan. */
+@media (prefers-reduced-motion: reduce) {
+  .btn:hover {
+    transform: none;
+    box-shadow: 0 4px 0 var(--ink);
+  }
+  .skiplink {
+    transition: none;
+  }
+}
+
+/* Break manual di judul hero cuma masuk akal selebar desktop. Di ponsel
+   dia memaksa "yang" turun sendirian jadi baris berisi satu kata; biarkan
+   teksnya mengalir sendiri di situ. */
+@media (max-width: 700px) {
+  .br-lebar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .card {
+    padding: 20px;
+  }
+  .blanket {
+    padding: 14px;
+    border-radius: 22px;
+  }
+}
+
+img,
+svg {
+  max-width: 100%;
 }

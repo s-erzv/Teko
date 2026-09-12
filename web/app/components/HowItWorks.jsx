@@ -31,15 +31,17 @@ export default function HowItWorks() {
           Anggota cuma berurusan dengan chat dan rupiah. Bagian kriptonya
           disembunyikan, bukan dihilangkan.
         </p>
-        <ol className="steps">
-          {LANGKAH.map((l, i) => (
-            <li className="card step" key={l.judul}>
-              <span className="step-num">{i + 1}</span>
-              <h3>{l.judul}</h3>
-              <p>{l.isi}</p>
-            </li>
-          ))}
-        </ol>
+        <div className="gingham blanket">
+          <ol className="steps">
+            {LANGKAH.map((l, i) => (
+              <li className="card step" key={l.judul}>
+                <span className="step-num">{i + 1}</span>
+                <h3>{l.judul}</h3>
+                <p>{l.isi}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
       </div>
     </section>
   );

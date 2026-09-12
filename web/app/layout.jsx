@@ -31,7 +31,12 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="id" className={`${fraunces.variable} ${inter.variable}`}>
-      <body>{children}</body>
+      <body>
+        <a className="skiplink" href="#konten">
+          Lompat ke konten
+        </a>
+        {children}
+      </body>
     </html>
   );
 }

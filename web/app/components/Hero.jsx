@@ -5,10 +5,17 @@ export default function Hero() {
   return (
     <section className="goldenhour section">
       <div className="wrap">
-        <Sunflower size={56} />
+        <div className="wordmark">
+          <Sunflower size={40} />
+          <span>Teko</span>
+        </div>
         <h1>
-          Bendahara arisan yang
-          <br />
+          {/* JSX membuang whitespace di sekitar elemen yang berdiri di baris
+              sendiri, jadi spasi ini harus ditulis eksplisit: tanpa itu,
+              begitu <br> disembunyikan di ponsel kedua kata menempel jadi
+              "yangnggak". */}
+          Bendahara arisan yang{" "}
+          <br className="br-lebar" />
           nggak bisa kabur bawa uang.
         </h1>
         <p className="lead">

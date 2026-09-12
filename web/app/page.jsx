@@ -6,7 +6,7 @@ import Gingham from "./components/Gingham";
 
 export default function Home() {
   return (
-    <main>
+    <main id="konten">
       <Hero />
       <Gingham />
       <HowItWorks />
