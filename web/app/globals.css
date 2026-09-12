@@ -56,3 +56,62 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Tata letak ───────────────────────────────────────────── */
+.wrap {
+  max-width: 1060px;
+  margin-inline: auto;
+  padding-inline: 20px;
+}
+
+.section {
+  padding-block: clamp(48px, 8vw, 96px);
+}
+
+/* ── Golden hour ──────────────────────────────────────────────
+   Cahaya sore rendah: paling pekat di bawah, memudar ke atas.
+   Arahnya sengaja terbalik dari gradien langit biasa. */
+.goldenhour {
+  background:
+    radial-gradient(90% 70% at 50% 100%, var(--sun-400) 0%, transparent 70%),
+    linear-gradient(180deg, var(--sun-100) 0%, var(--sun-200) 45%, var(--sun-300) 100%);
+}
+
+/* ── Taplak piknik ────────────────────────────────────────────
+   Gingham asli dibuat dari dua pita semi-transparan yang saling
+   silang: perpotongannya jadi lebih gelap dengan sendirinya,
+   persis seperti kain sungguhan. Dibuat dengan gradient, bukan
+   gambar, supaya tajam di layar mana pun dan nol beban unduh. */
+.gingham {
+  --gingham-size: 22px;
+  background-color: var(--paper);
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 154, 0, 0.55) 0 calc(var(--gingham-size) / 2),
+      transparent calc(var(--gingham-size) / 2) var(--gingham-size)
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 154, 0, 0.55) 0 calc(var(--gingham-size) / 2),
+      transparent calc(var(--gingham-size) / 2) var(--gingham-size)
+    );
+}
+
+/* Pita pembatas antar bagian. Gingham dipakai sebagai aksen selebar
+   pita, BUKAN sebagai latar seluruh halaman -- kotak-kotak penuh satu
+   layar bikin mata cepat lelah dan teks di atasnya susah dibaca. */
+.gingham-band {
+  height: 22px;
+}
+
+/* ── Kartu ────────────────────────────────────────────────────
+   Sudut membulat besar dan bayangan hangat rendah: terasa seperti
+   benda yang diletakkan di atas taplak, bukan panel aplikasi. */
+.card {
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-warm);
+  padding: 24px;
+}
