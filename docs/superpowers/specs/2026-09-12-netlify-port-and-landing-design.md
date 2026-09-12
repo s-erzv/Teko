@@ -178,9 +178,14 @@ mengulang pengiriman, jadi ini soal latensi, bukan kehilangan data.
 
 ## Desain visual
 
-Tema: summer sunflower sunrise dengan nuansa camping. Arisan adalah tradisi
-sosial yang hangat, bukan produk fintech, jadi arah hangat dan analog ini
-tepat, bukan sekadar selera.
+Tema: **summer picnic**. Ladang bunga matahari, cahaya golden hour, perkumpulan
+di luar ruang, taplak piknik, sore musim panas yang riang.
+
+Arah ini bukan sekadar selera. Arisan adalah perkumpulan orang yang saling
+percaya dan bergiliran, dan piknik membawa arti kebersamaan yang tepat: orang
+berkumpul, duduk melingkar, dan setiap orang kebagian. Itu persis mekanika
+produknya. Konsekuensinya untuk desain: hangat, analog, dan ramai-ramai, bukan
+dingin dan individual seperti dasbor fintech.
 
 Palet yang diminta:
 
@@ -203,12 +208,26 @@ dipakai untuk permukaan, blok, dan aksen, ditambah satu warna tinta:
 | `ink` | `#3D2410` | Teks utama, cokelat tua hangat, masih satu keluarga dengan matahari terbit |
 | `paper` | `#FFFDF5` | Latar dasar, putih hangat, bukan putih murni |
 
-Motif kotak-kotak putih-oranye dibuat dengan CSS gradient berulang, bukan
-gambar, supaya tetap tajam di layar mana pun dan tidak menambah beban unduh.
+**Motif taplak piknik.** Kotak-kotak putih-oranye adalah gingham taplak piknik,
+dibuat dengan CSS gradient berulang, bukan gambar, supaya tetap tajam di layar
+mana pun dan tidak menambah beban unduh. Dipakai sebagai pita pembatas antar
+bagian dan alas kartu, bukan sebagai latar seluruh halaman, supaya tidak
+melelahkan mata.
+
+**Bahasa visual pendukung**, semuanya CSS dan SVG inline, tanpa aset unduhan:
+
+- Gradien golden hour dari `sun-600` ke `sun-100` di latar hero, meniru cahaya
+  sore rendah
+- Siluet kepala bunga matahari sebagai penanda bagian dan butir daftar
+- Kartu dengan sudut membulat besar dan bayangan hangat rendah, terasa seperti
+  benda yang diletakkan di atas taplak
 
 Halaman tunggal, empat bagian: hero dengan proposisi dan dua tombol (buka bot,
 lihat kontrak), diagram cara kerja, bagian kenapa on-chain dengan tangkapan
 layar percakapan, dan penutup berisi tautan teknis.
+
+Gerak dibuat seperlunya saja dan dimatikan penuh di bawah
+`prefers-reduced-motion`.
 
 Statis penuh, tanpa pembacaan on-chain langsung. Keputusan sadar: halaman ini
 dinilai pada satu hari tertentu dan tidak boleh terlihat rusak gara-gara RPC
