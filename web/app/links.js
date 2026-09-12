@@ -12,5 +12,8 @@ export const BOT_URL = "https://t.me/tekoarisan_bot";
 export const CONTRACT_ADDRESS = "0x3Be07E38716991ADD619115E61FeEaD312878949";
 export const CONTRACT_URL = `https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`;
 
-export const REPO_URL = "https://github.com/s-erzv/teko";
+// Nama kanoniknya "Teko" dengan T besar; GitHub memang mengalihkan ejaan
+// huruf kecil, tapi tautan yang dipajang untuk juri sebaiknya menunjuk
+// langsung ke alamat sebenarnya, bukan lewat redirect.
+export const REPO_URL = "https://github.com/s-erzv/Teko";
 export const VRF_DOCS_URL = "https://docs.chain.link/vrf";
