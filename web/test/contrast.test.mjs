@@ -72,6 +72,18 @@ test("teks utama di atas kertas lolos ambang AAA 7:1", () => {
   assert.ok(rasio >= 7, `cuma ${rasio.toFixed(2)}:1`);
 });
 
+test("tinta lembut hanya atas kertas, lolos ambang 4.5:1", () => {
+  // --ink-soft dipakai untuk teks sekunder hanya di atas --paper.
+  // Kalau desain masa depan memakai --ink-soft di atas warna sun-*,
+  // assertion ini harus diperluas untuk cover latar yang baru itu.
+  const t = readTokens();
+  const rasio = contrastRatio(t["ink-soft"], t["paper"]);
+  assert.ok(
+    rasio >= 4.5,
+    `--ink-soft di atas --paper cuma ${rasio.toFixed(2)}:1, di bawah ambang 4.5`
+  );
+});
+
 test("putih di atas oranye TIDAK lolos -- ini alasan --ink harus ada", () => {
   const t = readTokens();
   const rasio = contrastRatio("#ffffff", t["sun-600"]);
