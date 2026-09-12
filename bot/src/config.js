@@ -10,8 +10,10 @@ const REQUIRED = [
   "IDRX_ADDRESS",
   "XENDIT_SECRET_KEY",
   "XENDIT_CALLBACK_TOKEN",
-  "AWS_REGION",
-  "KMS_KEY_ID",
+  "TEKO_AWS_REGION",
+  "TEKO_KMS_KEY_ID",
+  "TEKO_AWS_ACCESS_KEY_ID",
+  "TEKO_AWS_SECRET_ACCESS_KEY",
 ];
 
 const missing = REQUIRED.filter((k) => !process.env[k]);
@@ -56,8 +58,10 @@ export const config = {
     sweepGasTopupWei: ethers.parseEther(process.env.SWEEP_GAS_TOPUP_BNB || "0.0006"),
   },
   aws: {
-    region: process.env.AWS_REGION,
-    kmsKeyId: process.env.KMS_KEY_ID,
+    region: process.env.TEKO_AWS_REGION,
+    kmsKeyId: process.env.TEKO_KMS_KEY_ID,
+    accessKeyId: process.env.TEKO_AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.TEKO_AWS_SECRET_ACCESS_KEY,
   },
   xendit: {
     secretKey: process.env.XENDIT_SECRET_KEY,

@@ -21,7 +21,13 @@ import * as store from "./store.js";
  * atas nama user) — lihat juga sweepToTreasury() yang meminimalkan window
  * dana beneran nongkrong di wallet ini.
  */
-const kms = new KMSClient({ region: config.aws.region });
+const kms = new KMSClient({
+  region: config.aws.region,
+  credentials: {
+    accessKeyId: config.aws.accessKeyId,
+    secretAccessKey: config.aws.secretAccessKey,
+  },
+});
 
 async function encryptPrivateKey(privateKeyHex) {
   const { Plaintext, CiphertextBlob } = await kms.send(
