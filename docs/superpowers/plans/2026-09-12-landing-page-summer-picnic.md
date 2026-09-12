@@ -42,7 +42,7 @@
 - Consumes: tidak ada, ini task pertama
 - Produces: workspace `web` bernama `teko-web`; skrip root `pnpm run build:web`; direktori keluaran `web/out/`
 
-- [ ] **Step 1: Buat deklarasi workspace dan konfigurasi pnpm**
+- [x] **Step 1: Buat deklarasi workspace dan konfigurasi pnpm**
 
 `pnpm-workspace.yaml`:
 
@@ -62,7 +62,7 @@ packages:
 node-linker=hoisted
 ```
 
-- [ ] **Step 2: Buat package.json root**
+- [x] **Step 2: Buat package.json root**
 
 ```json
 {
@@ -81,7 +81,7 @@ node-linker=hoisted
 }
 ```
 
-- [ ] **Step 3: Buat package.json workspace web**
+- [x] **Step 3: Buat package.json workspace web**
 
 ```json
 {
@@ -101,7 +101,7 @@ node-linker=hoisted
 }
 ```
 
-- [ ] **Step 4: Buat konfigurasi Next.js untuk export statis**
+- [x] **Step 4: Buat konfigurasi Next.js untuk export statis**
 
 `web/next.config.mjs`:
 
@@ -118,7 +118,7 @@ const nextConfig = {
 export default nextConfig;
 ```
 
-- [ ] **Step 5: Buat layout dan halaman placeholder minimal**
+- [x] **Step 5: Buat layout dan halaman placeholder minimal**
 
 `web/app/layout.jsx`:
 
@@ -146,7 +146,7 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 6: Tambahkan keluaran build ke .gitignore root**
+- [x] **Step 6: Tambahkan keluaran build ke .gitignore root**
 
 Tambahkan baris berikut ke `.gitignore` yang sudah ada di root:
 
@@ -157,7 +157,7 @@ web/out/
 node_modules/
 ```
 
-- [ ] **Step 7: Buat netlify.toml**
+- [x] **Step 7: Buat netlify.toml**
 
 ```toml
 # Build dijalankan dari root repo, bukan dari web/, supaya nanti direktori
@@ -170,7 +170,7 @@ node_modules/
   NODE_VERSION = "24"
 ```
 
-- [ ] **Step 8: Pasang dependensi dan jalankan build**
+- [x] **Step 8: Pasang dependensi dan jalankan build**
 
 Run:
 
@@ -181,7 +181,7 @@ pnpm run build:web
 
 Expected: build selesai tanpa error, dan `web/out/index.html` ada.
 
-- [ ] **Step 9: Verifikasi keluaran statis benar-benar terbentuk**
+- [x] **Step 9: Verifikasi keluaran statis benar-benar terbentuk**
 
 Run:
 
@@ -191,7 +191,7 @@ test -f web/out/index.html && echo "OK: export statis terbentuk" || echo "GAGAL"
 
 Expected: `OK: export statis terbentuk`
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add pnpm-workspace.yaml .npmrc package.json netlify.toml .gitignore web/ pnpm-lock.yaml
@@ -213,7 +213,7 @@ Ini satu-satunya risiko desain yang bisa diuji mesin, dan risikonya nyata: enam 
 - Consumes: workspace `teko-web` dari Task 1
 - Produces: custom properties `--sun-100`..`--sun-600`, `--ink`, `--paper` di `:root`; fungsi uji `readTokens()` dan `contrastRatio(hexA, hexB)` di `web/test/contrast.test.mjs`
 
-- [ ] **Step 1: Tulis test yang gagal**
+- [x] **Step 1: Tulis test yang gagal**
 
 `web/test/contrast.test.mjs`:
 
@@ -302,12 +302,12 @@ test("putih di atas oranye TIDAK lolos -- ini alasan --ink harus ada", () => {
 });
 ```
 
-- [ ] **Step 2: Jalankan test, pastikan gagal**
+- [x] **Step 2: Jalankan test, pastikan gagal**
 
 Run: `pnpm run test:web`
 Expected: FAIL dengan error tidak bisa membaca `../app/globals.css` karena filenya belum ada.
 
-- [ ] **Step 3: Tulis globals.css dengan tokennya**
+- [x] **Step 3: Tulis globals.css dengan tokennya**
 
 `web/app/globals.css`:
 
@@ -372,7 +372,7 @@ body {
 }
 ```
 
-- [ ] **Step 4: Impor globals.css di layout**
+- [x] **Step 4: Impor globals.css di layout**
 
 Ubah `web/app/layout.jsx`, tambahkan baris impor paling atas:
 
@@ -394,12 +394,12 @@ export default function RootLayout({ children }) {
 }
 ```
 
-- [ ] **Step 5: Jalankan test, pastikan lolos**
+- [x] **Step 5: Jalankan test, pastikan lolos**
 
 Run: `pnpm run test:web`
 Expected: PASS, lima test.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/app/globals.css web/app/layout.jsx web/test/contrast.test.mjs
@@ -419,7 +419,7 @@ git commit -m "feat(web): token warna summer picnic + uji kontras otomatis"
 - Consumes: token dari Task 2
 - Produces: komponen `<Sunflower size={n} />` dan `<Gingham />`; kelas CSS `.goldenhour`, `.card`, `.wrap`, `.section`
 
-- [ ] **Step 1: Tambahkan primitif layout, gingham, dan golden hour ke globals.css**
+- [x] **Step 1: Tambahkan primitif layout, gingham, dan golden hour ke globals.css**
 
 Tambahkan di akhir `web/app/globals.css`:
 
@@ -488,7 +488,7 @@ Tambahkan di akhir `web/app/globals.css`:
 }
 ```
 
-- [ ] **Step 2: Buat komponen Sunflower**
+- [x] **Step 2: Buat komponen Sunflower**
 
 `web/app/components/Sunflower.jsx`:
 
@@ -527,7 +527,7 @@ export default function Sunflower({ size = 28, className = "" }) {
 }
 ```
 
-- [ ] **Step 3: Buat komponen Gingham**
+- [x] **Step 3: Buat komponen Gingham**
 
 `web/app/components/Gingham.jsx`:
 
@@ -538,7 +538,7 @@ export default function Gingham() {
 }
 ```
 
-- [ ] **Step 4: Pasang sementara di halaman untuk diperiksa mata**
+- [x] **Step 4: Pasang sementara di halaman untuk diperiksa mata**
 
 Ganti isi `web/app/page.jsx`:
 
@@ -563,7 +563,7 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 5: Periksa dengan mata di browser**
+- [x] **Step 5: Periksa dengan mata di browser**
 
 Run: `pnpm run dev:web`
 
@@ -571,12 +571,12 @@ Buka `http://localhost:3000` dan pastikan empat hal terlihat: gradien golden hou
 
 Hentikan server dengan Ctrl+C setelah selesai.
 
-- [ ] **Step 6: Pastikan uji kontras masih lolos**
+- [x] **Step 6: Pastikan uji kontras masih lolos**
 
 Run: `pnpm run test:web`
 Expected: PASS, lima test.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/app/globals.css web/app/components/ web/app/page.jsx
@@ -597,7 +597,7 @@ git commit -m "feat(web): primitif visual piknik (gingham, golden hour, bunga ma
 - Consumes: `.goldenhour`, `.wrap`, `.section`, `<Sunflower />` dari Task 3
 - Produces: komponen `<Hero />`
 
-- [ ] **Step 1: Pasang font lewat next/font**
+- [x] **Step 1: Pasang font lewat next/font**
 
 Ubah `web/app/layout.jsx`:
 
@@ -641,7 +641,7 @@ export default function RootLayout({ children }) {
 }
 ```
 
-- [ ] **Step 2: Tambahkan gaya tipografi dan tombol ke globals.css**
+- [x] **Step 2: Tambahkan gaya tipografi dan tombol ke globals.css**
 
 Tambahkan di akhir `web/app/globals.css`:
 
@@ -725,7 +725,7 @@ p {
 }
 ```
 
-- [ ] **Step 3: Buat komponen Hero**
+- [x] **Step 3: Buat komponen Hero**
 
 `web/app/components/Hero.jsx`:
 
@@ -765,7 +765,7 @@ export default function Hero() {
 }
 ```
 
-- [ ] **Step 4: Pasang Hero di halaman**
+- [x] **Step 4: Pasang Hero di halaman**
 
 `web/app/page.jsx`:
 
@@ -783,18 +783,18 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 5: Periksa di browser**
+- [x] **Step 5: Periksa di browser**
 
 Run: `pnpm run dev:web`
 
 Buka `http://localhost:3000`. Pastikan judulnya memakai serif hangat, dua tombol punya bayangan padat di bawahnya dan bergeser turun saat disorot, dan teks tombol berwarna cokelat tua, bukan putih. Tekan Tab untuk memastikan cincin fokus terlihat jelas di kedua tombol. Hentikan dengan Ctrl+C.
 
-- [ ] **Step 6: Pastikan build dan test masih lolos**
+- [x] **Step 6: Pastikan build dan test masih lolos**
 
 Run: `pnpm run test:web && pnpm run build:web`
 Expected: test PASS, build sukses.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/app/
@@ -814,7 +814,7 @@ git commit -m "feat(web): bagian hero golden hour + tipografi"
 - Consumes: `.card`, `.wrap`, `.section`, `<Sunflower />`
 - Produces: komponen `<HowItWorks />`
 
-- [ ] **Step 1: Tambahkan gaya grid langkah ke globals.css**
+- [x] **Step 1: Tambahkan gaya grid langkah ke globals.css**
 
 Tambahkan di akhir `web/app/globals.css`:
 
@@ -860,7 +860,7 @@ Tambahkan di akhir `web/app/globals.css`:
 }
 ```
 
-- [ ] **Step 2: Buat komponen HowItWorks**
+- [x] **Step 2: Buat komponen HowItWorks**
 
 `web/app/components/HowItWorks.jsx`:
 
@@ -913,7 +913,7 @@ export default function HowItWorks() {
 }
 ```
 
-- [ ] **Step 3: Pasang di halaman**
+- [x] **Step 3: Pasang di halaman**
 
 `web/app/page.jsx`:
 
@@ -934,18 +934,18 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 4: Periksa di browser**
+- [x] **Step 4: Periksa di browser**
 
 Run: `pnpm run dev:web`
 
 Buka `http://localhost:3000`. Pastikan empat kartu langkah tersusun rapi dan nomornya berada di lingkaran kuning bergaris tua. Perkecil jendela sampai selebar ponsel dan pastikan kartunya menumpuk jadi satu kolom tanpa ada yang terpotong. Hentikan dengan Ctrl+C.
 
-- [ ] **Step 5: Pastikan test dan build lolos**
+- [x] **Step 5: Pastikan test dan build lolos**
 
 Run: `pnpm run test:web && pnpm run build:web`
 Expected: test PASS, build sukses.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/app/
@@ -966,7 +966,7 @@ git commit -m "feat(web): bagian cara kerjanya"
 - Consumes: `.card`, `.wrap`, `.section`, `<Sunflower />`
 - Produces: komponen `<WhyOnchain />` dan `<Footer />`
 
-- [ ] **Step 1: Tambahkan gaya untuk daftar alasan dan penutup**
+- [x] **Step 1: Tambahkan gaya untuk daftar alasan dan penutup**
 
 Tambahkan di akhir `web/app/globals.css`:
 
@@ -1017,7 +1017,7 @@ Tambahkan di akhir `web/app/globals.css`:
 }
 ```
 
-- [ ] **Step 2: Buat komponen WhyOnchain**
+- [x] **Step 2: Buat komponen WhyOnchain**
 
 `web/app/components/WhyOnchain.jsx`:
 
@@ -1072,7 +1072,7 @@ export default function WhyOnchain() {
 }
 ```
 
-- [ ] **Step 3: Buat komponen Footer**
+- [x] **Step 3: Buat komponen Footer**
 
 `web/app/components/Footer.jsx`:
 
@@ -1109,7 +1109,7 @@ export default function Footer() {
 }
 ```
 
-- [ ] **Step 4: Rangkai halaman lengkap**
+- [x] **Step 4: Rangkai halaman lengkap**
 
 `web/app/page.jsx`:
 
@@ -1134,18 +1134,18 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 5: Periksa di browser**
+- [x] **Step 5: Periksa di browser**
 
 Run: `pnpm run dev:web`
 
 Buka `http://localhost:3000` dan gulir dari atas sampai bawah. Pastikan urutannya hero, pita gingham, cara kerjanya, pita gingham, kenapa on-chain, lalu penutup kuning. Hentikan dengan Ctrl+C.
 
-- [ ] **Step 6: Pastikan test dan build lolos**
+- [x] **Step 6: Pastikan test dan build lolos**
 
 Run: `pnpm run test:web && pnpm run build:web`
 Expected: test PASS, build sukses.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/app/
@@ -1163,7 +1163,7 @@ git commit -m "feat(web): bagian kenapa on-chain + penutup"
 - Consumes: seluruh komponen dari Task 4 sampai 6
 - Produces: situs ter-deploy dengan URL publik
 
-- [ ] **Step 1: Tambahkan pemolesan responsif dan perbaiki reduced-motion**
+- [x] **Step 1: Tambahkan pemolesan responsif dan perbaiki reduced-motion**
 
 Tambahkan di akhir `web/app/globals.css`:
 
@@ -1194,17 +1194,17 @@ svg {
 }
 ```
 
-- [ ] **Step 2: Periksa di lebar ponsel**
+- [x] **Step 2: Periksa di lebar ponsel**
 
 Run: `pnpm run dev:web`
 
 Buka `http://localhost:3000`, kecilkan jendela sampai sekitar 380px. Pastikan tidak ada gulir mendatar sama sekali, tombolnya melebar penuh, dan semua kartu jadi satu kolom. Tekan Tab dan pastikan cincin fokus terlihat jelas di tiap tautan dan tombol. Hentikan dengan Ctrl+C.
 
-- [ ] **Step 3: Periksa dengan gerak dimatikan**
+- [x] **Step 3: Periksa dengan gerak dimatikan**
 
 Di DevTools, buka Rendering lalu setel `prefers-reduced-motion` ke `reduce`. Muat ulang halaman dan pastikan tombol benar-benar diam saat disorot, tidak bergeser sama sekali.
 
-- [ ] **Step 4: Jalankan seluruh test repo**
+- [x] **Step 4: Jalankan seluruh test repo**
 
 Run:
 
@@ -1215,7 +1215,7 @@ forge test
 
 Expected: test bot 25 PASS, test web 5 PASS, test Foundry 26 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/app/
