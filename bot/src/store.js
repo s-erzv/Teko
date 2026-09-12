@@ -32,9 +32,16 @@ function check(error, context) {
 // ── Fallback in-memory ────────────────────────────────────────
 const mem = {
   groups: new Map(), // groupId -> {group_id, chat_id, size, contribution_idr, status}
-  members: [], // {group_id, telegram_user_id, username, wallet_address}
+  members: [], // {group_id, telegram_user_id, username, wallet_address, exited}
   payments: new Map(), // order_id -> {order_id, group_id, round, telegram_user_id, amount_idr, fee_idr, status, payment_url, tx_hash}
   wallets: new Map(), // telegram_user_id -> {telegram_user_id, address, encrypted_key (json), external_address}
+  payoutDestinations: new Map(), // telegram_user_id -> {channel_code, account_number, account_holder_name}
+  pendingPayouts: new Map(), // telegram_user_id -> {group_id, round, prize_idr}
+  payouts: new Map(), // reference_id -> baris buku besar pencairan
+  pendingDms: [], // {id, telegram_user_id, body}
+  processedEvents: new Set(), // event_key
+  cursors: new Map(), // id -> last_block
+  seq: 0,
 };
 
 // ── Groups ────────────────────────────────────────────────────
@@ -144,6 +151,8 @@ export async function addMember({ groupId, telegramUserId, username, walletAddre
     telegram_user_id: String(telegramUserId),
     username: username || null,
     wallet_address: walletAddress,
+    exited: false,
+    exited_at: null,
   };
   if (sb) {
     const { error } = await sb.from("members").upsert(row, { onConflict: "group_id,telegram_user_id" });
@@ -158,13 +167,48 @@ export async function addMember({ groupId, telegramUserId, username, walletAddre
   return row;
 }
 
-export async function getMembers(groupId) {
+/**
+ * Anggota grup. Default HANYA yang masih aktif — anggota yang keluar atau
+ * diganti barisnya sengaja disimpan (riwayat pembayarannya masih dipakai buat
+ * rekonsiliasi) tapi tidak boleh muncul lagi di roster `/status` maupun kena
+ * sapuan denda. Pakai `includeExited` cuma buat lookup historis, mis.
+ * mencocokkan address pemenang ke identitas Telegram.
+ */
+export async function getMembers(groupId, { includeExited = false } = {}) {
   if (sb) {
-    const { data, error } = await sb.from("members").select("*").eq("group_id", groupId);
+    let q = sb.from("members").select("*").eq("group_id", groupId);
+    if (!includeExited) q = q.eq("exited", false);
+    const { data, error } = await q;
     check(error, "getMembers");
     return data || [];
   }
-  return mem.members.filter((m) => m.group_id === groupId);
+  return mem.members.filter(
+    (m) => m.group_id === groupId && (includeExited || !m.exited)
+  );
+}
+
+/**
+ * Tandai anggota sudah keluar / digantikan. Dipanggil SETELAH transaksi
+ * on-chain-nya sukses (exit / replaceMember), jadi baris DB tidak pernah
+ * bilang "keluar" untuk slot yang di kontrak masih aktif.
+ */
+export async function markMemberExited(groupId, telegramUserId) {
+  if (sb) {
+    const { error } = await sb
+      .from("members")
+      .update({ exited: true, exited_at: new Date().toISOString() })
+      .eq("group_id", groupId)
+      .eq("telegram_user_id", String(telegramUserId));
+    check(error, "markMemberExited");
+    return;
+  }
+  const m = mem.members.find(
+    (x) => x.group_id === groupId && x.telegram_user_id === String(telegramUserId)
+  );
+  if (m) {
+    m.exited = true;
+    m.exited_at = new Date().toISOString();
+  }
 }
 
 /** Cari member lewat @username Telegram (case-insensitive) — dipakai buat
@@ -178,13 +222,16 @@ export async function getMemberByUsername(groupId, username) {
       .from("members")
       .select("*")
       .eq("group_id", groupId)
+      .eq("exited", false)
       .ilike("username", uname)
       .limit(1);
     check(error, "getMemberByUsername");
     return data?.[0] || null;
   }
   return (
-    mem.members.find((m) => m.group_id === groupId && (m.username || "").toLowerCase() === uname) || null
+    mem.members.find(
+      (m) => m.group_id === groupId && !m.exited && (m.username || "").toLowerCase() === uname
+    ) || null
   );
 }
 
@@ -343,7 +390,6 @@ export async function setPayoutDestination(telegramUserId, { channel_code, accou
     const { error } = await sb.from("payout_destinations").upsert(row, { onConflict: "telegram_user_id" });
     check(error, "setPayoutDestination");
   } else {
-    mem.payoutDestinations = mem.payoutDestinations || new Map();
     mem.payoutDestinations.set(row.telegram_user_id, row);
   }
 }
@@ -358,27 +404,222 @@ export async function getPayoutDestination(telegramUserId) {
     check(error, "getPayoutDestination");
     return data?.[0] || null;
   }
-  mem.payoutDestinations = mem.payoutDestinations || new Map();
   return mem.payoutDestinations.get(String(telegramUserId)) || null;
 }
 
-// ── Pending payout (state percakapan singkat; selalu in-memory) ─
-const pendingPayouts = new Map(); // telegram_user_id -> {groupId, round, prizeIdr}
+// ── Pembayaran yang perlu dicoba ulang ────────────────────────
+/**
+ * Setoran yang uangnya SUDAH masuk (invoice lunas) tapi kreditnya on-chain
+ * gagal — mis. saldo IDRX Treasury habis atau RPC lagi ngambek. Dipakai cron
+ * retry di index.js; tanpa ini baris `deposit_failed` cuma jadi catatan mati
+ * padahal user sudah bayar beneran.
+ */
+export async function getRetryablePayments(limit = 25) {
+  if (sb) {
+    const { data, error } = await sb
+      .from("payments")
+      .select("*")
+      .eq("status", "deposit_failed")
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    check(error, "getRetryablePayments");
+    return data || [];
+  }
+  return [...mem.payments.values()].filter((p) => p.status === "deposit_failed").slice(0, limit);
+}
 
-export function setPendingPayout(telegramUserId, data) {
-  pendingPayouts.set(String(telegramUserId), data);
-}
-export function getPendingPayout(telegramUserId) {
-  return pendingPayouts.get(String(telegramUserId)) || null;
-}
-export function clearPendingPayout(telegramUserId) {
-  pendingPayouts.delete(String(telegramUserId));
+/**
+ * Kembalikan baris `deposit_failed` ke 'pending' supaya `onPaymentSettled`
+ * bisa mengklaimnya lagi lewat jalur normal (`claimPaymentPending`) — satu
+ * pintu klaim, jadi retry tidak pernah bisa balapan sama webhook yang telat.
+ */
+export async function requeuePayment(orderId) {
+  if (sb) {
+    const { data, error } = await sb
+      .from("payments")
+      .update({ status: "pending" })
+      .eq("order_id", orderId)
+      .eq("status", "deposit_failed")
+      .select()
+      .maybeSingle();
+    check(error, "requeuePayment");
+    return data || null;
+  }
+  const row = mem.payments.get(orderId);
+  if (!row || row.status !== "deposit_failed") return null;
+  row.status = "pending";
+  return row;
 }
 
-// ── Alur tanya-jawab "buat arisan" (state percakapan singkat; in-memory) ─
-// Kunci per CHAT (bukan per user) — arisan dibikin buat 1 grup, siapa pun
-// admin di grup itu boleh lanjutin/jawab pertanyaannya.
-const pendingCreations = new Map(); // chat_id -> {step, size, contributionIdr, cycleDays, drawMode}
+// ── Kursor blok event on-chain ────────────────────────────────
+/** Blok terakhir yang sudah dipindai buat `id` (nama event). null = belum pernah. */
+export async function getCursor(id) {
+  if (sb) {
+    const { data, error } = await sb.from("chain_cursor").select("last_block").eq("id", id).limit(1);
+    check(error, "getCursor");
+    return data?.[0] ? Number(data[0].last_block) : null;
+  }
+  return mem.cursors.has(id) ? mem.cursors.get(id) : null;
+}
+
+/** Majukan kursor. Sengaja tidak pernah mundur — event lama sudah diproses. */
+export async function setCursor(id, lastBlock) {
+  const current = await getCursor(id);
+  if (current !== null && current >= lastBlock) return;
+  if (sb) {
+    const { error } = await sb
+      .from("chain_cursor")
+      .upsert({ id, last_block: lastBlock, updated_at: new Date().toISOString() }, { onConflict: "id" });
+    check(error, "setCursor");
+    return;
+  }
+  mem.cursors.set(id, lastBlock);
+}
+
+/**
+ * Klaim satu event on-chain buat diproses, atomik lewat primary key.
+ * Backfill saat boot dan listener live pasti melihat sebagian event yang
+ * SAMA — ini yang bikin cuma satu di antaranya yang jalan.
+ * @returns {Promise<boolean>} true kalau kita yang berhak memproses.
+ */
+export async function claimEvent(eventKey, kind) {
+  if (sb) {
+    const { error } = await sb.from("processed_events").insert({ event_key: eventKey, kind });
+    if (error) {
+      if (error.code === "23505") return false; // sudah diproses duluan
+      check(error, "claimEvent");
+    }
+    return true;
+  }
+  if (mem.processedEvents.has(eventKey)) return false;
+  mem.processedEvents.add(eventKey);
+  return true;
+}
+
+/**
+ * Lepas lagi klaim sebuah event supaya bisa dicoba ulang.
+ *
+ * Tanpa ini, event yang gagal diproses SETELAH diklaim akan dilewati selamanya
+ * oleh pemindaian berikutnya — persis kegagalan yang paling ingin dihindari
+ * (pemenang yang tidak pernah diumumkan).
+ */
+export async function releaseEvent(eventKey) {
+  if (sb) {
+    const { error } = await sb.from("processed_events").delete().eq("event_key", eventKey);
+    check(error, "releaseEvent");
+    return;
+  }
+  mem.processedEvents.delete(eventKey);
+}
+
+// ── Hadiah yang nunggu nomor rekening pemenang ────────────────
+// Dipersistensi (dulu Map in-memory): hadiah sudah disapu ke Treasury SEBELUM
+// pemenang ditanya rekeningnya, jadi kalau state ini hilang gara-gara restart,
+// balasan pemenang didiamkan sementara uangnya sudah pindah.
+export async function setPendingPayout(telegramUserId, { groupId, round, prizeIdr }) {
+  const row = {
+    telegram_user_id: String(telegramUserId),
+    group_id: groupId,
+    round,
+    prize_idr: prizeIdr,
+  };
+  if (sb) {
+    const { error } = await sb.from("pending_payouts").upsert(row, { onConflict: "telegram_user_id" });
+    check(error, "setPendingPayout");
+  } else {
+    mem.pendingPayouts.set(row.telegram_user_id, row);
+  }
+}
+
+export async function getPendingPayout(telegramUserId) {
+  let row;
+  if (sb) {
+    const { data, error } = await sb
+      .from("pending_payouts")
+      .select("*")
+      .eq("telegram_user_id", String(telegramUserId))
+      .limit(1);
+    check(error, "getPendingPayout");
+    row = data?.[0];
+  } else {
+    row = mem.pendingPayouts.get(String(telegramUserId));
+  }
+  if (!row) return null;
+  return { groupId: Number(row.group_id), round: Number(row.round), prizeIdr: Number(row.prize_idr) };
+}
+
+export async function clearPendingPayout(telegramUserId) {
+  if (sb) {
+    const { error } = await sb
+      .from("pending_payouts")
+      .delete()
+      .eq("telegram_user_id", String(telegramUserId));
+    check(error, "clearPendingPayout");
+  } else {
+    mem.pendingPayouts.delete(String(telegramUserId));
+  }
+}
+
+// ── Buku besar pencairan fiat ─────────────────────────────────
+/** Catat percobaan payout SEBELUM request dikirim ke Xendit. */
+export async function savePayout(row) {
+  const full = { ...row, status: row.status || "requested", updated_at: new Date().toISOString() };
+  if (sb) {
+    const { error } = await sb.from("payouts").upsert(full, { onConflict: "reference_id" });
+    check(error, "savePayout");
+  } else {
+    mem.payouts.set(full.reference_id, full);
+  }
+  return full;
+}
+
+export async function updatePayout(referenceId, patch) {
+  const full = { ...patch, updated_at: new Date().toISOString() };
+  if (sb) {
+    const { error } = await sb.from("payouts").update(full).eq("reference_id", referenceId);
+    check(error, "updatePayout");
+  } else if (mem.payouts.has(referenceId)) {
+    Object.assign(mem.payouts.get(referenceId), full);
+  }
+}
+
+export async function getPayout(referenceId) {
+  if (sb) {
+    const { data, error } = await sb
+      .from("payouts")
+      .select("*")
+      .eq("reference_id", referenceId)
+      .limit(1);
+    check(error, "getPayout");
+    return data?.[0] || null;
+  }
+  return mem.payouts.get(referenceId) || null;
+}
+
+/** Pencairan yang belum tuntas (buat command rekonsiliasi admin). */
+export async function getUnsettledPayouts(limit = 50) {
+  if (sb) {
+    const { data, error } = await sb
+      .from("payouts")
+      .select("*")
+      .in("status", ["requested", "accepted", "failed", "error"])
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    check(error, "getUnsettledPayouts");
+    return data || [];
+  }
+  return [...mem.payouts.values()]
+    .filter((p) => ["requested", "accepted", "failed", "error"].includes(p.status))
+    .slice(0, limit);
+}
+
+// ── Alur tanya-jawab "buat arisan" ────────────────────────────
+// SENGAJA tetap in-memory: ini state percakapan berumur detik, isinya cuma
+// jawaban setengah jadi ("5 orang", "200rb"), tidak ada uang yang bergantung
+// padanya. Hilang saat restart = user mengetik ulang permintaannya, bukan
+// kehilangan dana. Kunci per CHAT (bukan per user) — arisan dibikin buat 1
+// grup, siapa pun admin di grup itu boleh lanjutin/jawab pertanyaannya.
+const pendingCreations = new Map(); // chat_id -> {size, contributionIdr, cycleDays, drawMode}
 
 export function setPendingCreation(chatId, data) {
   pendingCreations.set(String(chatId), data);
@@ -391,16 +632,43 @@ export function clearPendingCreation(chatId) {
 }
 
 // ── Antrean DM (resi/klaim yang gagal terkirim karena user belum /start) ─
-const pendingDMs = new Map(); // telegram_user_id -> [text, ...]
-
-export function addPendingDM(telegramUserId, text) {
-  const k = String(telegramUserId);
-  if (!pendingDMs.has(k)) pendingDMs.set(k, []);
-  pendingDMs.get(k).push(text);
+// Ikut dipersistensi: isinya resi pembayaran dan pemberitahuan menang, bukan
+// basa-basi — kalau hilang saat restart, user tidak pernah tahu uangnya masuk.
+export async function addPendingDM(telegramUserId, text) {
+  if (sb) {
+    const { error } = await sb
+      .from("pending_dms")
+      .insert({ telegram_user_id: String(telegramUserId), body: text });
+    check(error, "addPendingDM");
+    return;
+  }
+  mem.pendingDms.push({ id: ++mem.seq, telegram_user_id: String(telegramUserId), body: text });
 }
-export function takePendingDMs(telegramUserId) {
-  const k = String(telegramUserId);
-  const arr = pendingDMs.get(k) || [];
-  pendingDMs.delete(k);
-  return arr;
+
+/**
+ * Ambil DM tertunda milik user, urut lama->baru, dan hapus dari antrean.
+ * Pengirimannya bisa gagal lagi (user masih belum /start) — pemanggil yang
+ * mengembalikan sisanya lewat `addPendingDM`, lihat notifier.flushPendingDMs.
+ */
+export async function takePendingDMs(telegramUserId) {
+  const uid = String(telegramUserId);
+  if (sb) {
+    const { data, error } = await sb
+      .from("pending_dms")
+      .select("*")
+      .eq("telegram_user_id", uid)
+      .order("id", { ascending: true });
+    check(error, "takePendingDMs:select");
+    const rows = data || [];
+    if (!rows.length) return [];
+    const { error: delErr } = await sb
+      .from("pending_dms")
+      .delete()
+      .in("id", rows.map((r) => r.id));
+    check(delErr, "takePendingDMs:delete");
+    return rows.map((r) => r.body);
+  }
+  const mine = mem.pendingDms.filter((d) => d.telegram_user_id === uid).sort((a, b) => a.id - b.id);
+  mem.pendingDms = mem.pendingDms.filter((d) => d.telegram_user_id !== uid);
+  return mine.map((d) => d.body);
 }

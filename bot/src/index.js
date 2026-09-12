@@ -14,6 +14,7 @@ import {
 } from "./store.js";
 import * as chain from "./chain.js";
 import * as svc from "./service.js";
+import { parseInt10, parseRupiah, parseCycleAnswer, parseDrawModeAnswer } from "./parse.js";
 
 const bot = new Telegraf(config.telegram.token);
 
@@ -21,7 +22,7 @@ const isAdmin = (ctx) => config.telegram.adminIds.includes(String(ctx.from?.id))
 
 // Prefilter murah supaya Groq tidak dipanggil di tiap baris obrolan grup.
 const TRIGGER =
-  /\b(arisan|gabung|join|ikut|setor|bayar|undi|acak|status|teko|keluar|utang|denda|prioritas|tawaran|tuker|tukeran|ganti|setuju|tolak|terima|wallet|usul|skip|kick|siklus|upfront)\b/i;
+  /\b(arisan|gabung|join|ikut|setor|bayar|undi|acak|status|teko|keluar|utang|denda|prioritas|tawaran|tuker|tukeran|ganti|setuju|tolak|terima|wallet|usul|skip|kick|siklus|upfront|reputasi|skor|rapor)\b/i;
 
 const WELCOME_MESSAGE =
   "👋 Halo! Aku <b>Teko</b>, bendahara arisan digital — dana ditahan smart contract BNB Chain, " +
@@ -38,7 +39,8 @@ const HELP_MESSAGE =
   "💸 <i>mau prioritas 50rb ke @user</i> (berbayar, tawar posisi) · <i>terima tawaran</i> · <i>tolak tawaran</i>\n" +
   "🚪 <i>keluar</i> · <i>ganti orang</i> · <i>pakai wallet sendiri 0x...</i>\n" +
   "🗳️ <i>usul skip @user</i> · <i>usul keluarkan @user</i> · <i>setuju &lt;id&gt;</i> · <i>tolak &lt;id&gt;</i>\n" +
-  "👑 <i>undi</i> (admin)\n\n" +
+  "⭐ <i>reputasi</i> · <i>reputasi @user</i> — skor lintas semua arisan\n" +
+  "👑 <i>undi</i> (admin) · /pencairan (admin) · /tutup_paksa (admin, darurat)\n\n" +
   "Ketik /start buat penjelasan lebih lengkap.";
 
 const reply = (ctx, r) =>
@@ -88,45 +90,6 @@ async function promptJoinPrivate(ctx) {
 // langsung dibikin — jalur cepat buat yang udah tau mau apa. Kalau ada yang
 // belum disebutkan, bot NANYA satu-satu (bukan diam-diam pakai default),
 // per keluhan user: default itu OK tapi harus ditawarkan, bukan ditetapkan sepihak.
-function parseInt10(text) {
-  const m = String(text).match(/\d+/);
-  return m ? parseInt(m[0], 10) : null;
-}
-
-function parseRupiah(text) {
-  const t = String(text).toLowerCase();
-  // Satuan nempel langsung ke angka (mis. "200rb", "1.5jt") jadi TIDAK boleh
-  // pakai \b sebelum satuan -- digit dan huruf sama-sama \w, jadi gak ada
-  // word-boundary di antara "200" dan "rb".
-  const withUnit = t.match(/(\d+(?:[.,]\d+)?)\s*(rb|ribu|k|jt|juta)\b/);
-  if (withUnit) {
-    // Ada satuan -> titik/koma di sini pasti desimal, mis. "1.5jt",
-    // bukan pemisah ribuan, jadi JANGAN di-strip sebelum parseFloat.
-    let n = parseFloat(withUnit[1].replace(",", "."));
-    if (["rb", "ribu", "k"].includes(withUnit[2])) n *= 1000;
-    else n *= 1_000_000;
-    return Math.round(n) || null;
-  }
-  // Gak ada satuan -> anggap titik/koma itu pemisah ribuan gaya Rupiah
-  // (mis. "1.000.000"), jadi aman di-strip semua.
-  const numMatch = t.match(/[\d.,]+/);
-  if (!numMatch) return null;
-  const n = parseInt(numMatch[0].replace(/[.,]/g, ""), 10);
-  return n || null;
-}
-
-function parseCycleAnswer(text) {
-  const t = String(text).toLowerCase();
-  if (/default|standar|biasa|terserah|gpp|gapapa/.test(t)) return "default";
-  if (/minggu/.test(t)) return 7;
-  if (/bulan/.test(t)) return 30;
-  return parseInt10(t);
-}
-
-function parseDrawModeAnswer(text) {
-  return /upfront|awal|sekali/i.test(text) ? "upfront" : "percycle";
-}
-
 async function askNextCreationQuestion(ctx, state) {
   if (!state.size) return ctx.reply("Mau berapa orang yang ikutan arisan ini?");
   if (!state.contributionIdr) return ctx.reply("Setoran per orang per ronde berapa? (contoh: 200rb)");
@@ -256,6 +219,35 @@ bot.action("ikut", async (ctx) => {
   }
 });
 
+bot.command("reputasi", async (ctx) => {
+  const target = ctx.message.text.split(/\s+/)[1];
+  reply(ctx, await svc.reputationCard({ chatId: ctx.chat.id, userId: ctx.from.id, targetUsername: target }));
+});
+
+// Rekonsiliasi: pencairan yang belum tuntas (requested/accepted/failed/error).
+bot.command("pencairan", async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply("Hanya admin.");
+  reply(ctx, await svc.unsettledPayouts());
+});
+
+// Escape hatch darurat buat grup yang macet. Merusak & tidak bisa dibatalkan,
+// jadi butuh konfirmasi eksplisit di teks command — bukan cuma satu kata.
+bot.command("tutup_paksa", async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply("Hanya admin.");
+  const gid = await svc.activeGroupId(ctx.chat.id);
+  if (!gid) return ctx.reply("Belum ada arisan aktif di grup ini.");
+  if (!/\bYA\b/.test(ctx.message.text)) {
+    return ctx.reply(
+      `⚠️ Ini menutup <b>Arisan #${gid}</b> secara permanen. Sisa pot dan cadangan langsung ` +
+        `dibagi rata ke anggota yang belum pernah menang, dan arisannya <b>tidak bisa dilanjutkan lagi</b>.\n\n` +
+        `Kalau yakin, ketik: <code>/tutup_paksa YA</code>`,
+      { parse_mode: "HTML" }
+    );
+  }
+  await ctx.reply("⏳ Menutup paksa arisan on-chain, tunggu sebentar...");
+  reply(ctx, await svc.forceCloseArisan({ chatId: ctx.chat.id }));
+});
+
 bot.command("draw", async (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply("Hanya admin yang bisa mengundi.");
   reply(ctx, await svc.requestDraw({ chatId: ctx.chat.id }));
@@ -344,10 +336,27 @@ bot.on("text", async (ctx) => {
         return startCreationFlow(ctx, intent);
       }
 
-      case "join":
-        if (ctx.chat.type === "private")
-          return ctx.reply("Buka arisannya dari grup, lalu tekan tombol Ikut & Setor ya.");
+      case "join": {
+        // Di japri, langsung kasih link setorannya. Pesan pengumuman pemenang
+        // menyuruh anggota ketik "bayar" buat ronde berikutnya, dan dulu itu
+        // buntu di sini kalau diketik di japri.
+        if (ctx.chat.type === "private") {
+          const gid = await svc.activeGroupIdForUser(ctx.chat.id, ctx.from.id);
+          if (!gid)
+            return ctx.reply("Kamu belum ikut arisan aktif mana pun. Buka grup arisannya dulu ya.");
+          return sendPayLink(
+            ctx,
+            await svc.joinOrPay({
+              groupId: gid,
+              userId: ctx.from.id,
+              username: ctx.from.username,
+              firstName: ctx.from.first_name,
+              lastName: ctx.from.last_name,
+            })
+          );
+        }
         return promptJoinPrivate(ctx);
+      }
 
       case "status":
         return reply(ctx, await svc.statusArisan({ chatId: ctx.chat.id, isAdmin: isAdmin(ctx) }));
@@ -433,6 +442,16 @@ bot.on("text", async (ctx) => {
           })
         );
 
+      case "reputation":
+        return reply(
+          ctx,
+          await svc.reputationCard({
+            chatId: ctx.chat.id,
+            userId: ctx.from.id,
+            targetUsername: intent.target_username,
+          })
+        );
+
       case "complaint":
         return ctx.reply(`Komplain dicatat: <i>${esc(intent.text || text)}</i>`, { parse_mode: "HTML" });
 
@@ -468,6 +487,30 @@ async function main() {
   if (approved) console.log("[chain] Treasury approve IDRX ke kontrak.");
 
   console.log(`[store] mode: ${storeMode}`);
+  if (storeMode !== "supabase") {
+    console.warn(
+      "[store] ⚠️  in-memory: hadiah yang nunggu rekening, antrean resi, dan kursor event " +
+        "hilang tiap restart. Isi SUPABASE_URL + SUPABASE_SERVICE_KEY buat produksi."
+    );
+  }
+
+  // Susulkan dulu event RoundDrawn yang terjadi selagi proses ini mati, BARU
+  // pasang listener live. Urutannya penting: fulfillment VRF adalah transaksi
+  // terpisah yang dikirim Chainlink kapan saja, jadi tanpa langkah ini setiap
+  // restart berpotensi menelan satu pemenang tanpa jejak.
+  //
+  // Mode in-memory dilewati: kursor & jejak event-nya toh tidak bertahan, jadi
+  // backfill di situ cuma bakal mengumumkan ulang ronde lama tiap kali boot.
+  if (storeMode === "supabase") {
+    try {
+      const n = await svc.backfillRoundDrawn();
+      console.log(`[chain] backfill RoundDrawn: ${n} event susulan diproses.`);
+    } catch (e) {
+      console.error("[chain] backfill RoundDrawn gagal:", e.message);
+    }
+  } else {
+    console.log("[chain] backfill RoundDrawn dilewati (store in-memory).");
+  }
 
   // Pengundi (drawRound) cuma MEMINTA randomness VRF — pemenang beneran
   // diketahui belakangan lewat event RoundDrawn ini, yang bisa muncul kapan
@@ -477,8 +520,22 @@ async function main() {
   });
   console.log("[chain] mendengar event RoundDrawn (VRF fulfillment)...");
 
+  // Saldo Treasury dicek sekali di boot: kalau IDRX/BNB-nya sudah tipis
+  // sekarang, setoran yang masuk hari ini bakal gagal dikreditkan.
+  try {
+    const h = await svc.checkTreasuryHealth();
+    console.log(
+      `[chain] Treasury IDRX: Rp${Math.round(h.idrxIdr).toLocaleString("id-ID")} ` +
+        `(butuh Rp${Math.round(h.requiredIdr).toLocaleString("id-ID")}/ronde penuh)` +
+        `${h.idrxLow || h.bnbLow ? " ⚠️ TIPIS" : ""}`
+    );
+  } catch (e) {
+    console.error("[chain] cek saldo Treasury gagal:", e.message);
+  }
+
   startWebhookServer();
   startDeadlineCron();
+  startRecoveryCron();
 
   // Catatan: bot.launch() di Telegraf v4 baru resolve saat bot STOP, jadi log
   // sukses ditaruh sebelum await (polling sudah aktif begitu launch dipanggil).
@@ -503,6 +560,41 @@ function startDeadlineCron() {
     svc.sweepAllDeadlines().catch((e) => console.error("[cron] sweepAllDeadlines gagal:", e.message));
   }, intervalMs);
   console.log(`[cron] sweep deadline tiap ${Math.round(intervalMs / 60000)} menit.`);
+}
+
+/**
+ * Cron pemulihan. Tiga hal yang sama-sama soal "sesuatu sudah terjadi tapi
+ * belum tercatat", makanya digabung di satu interval yang lebih rapat dari
+ * sweep denda:
+ *
+ *   1. Setoran yang uangnya sudah masuk tapi kreditnya on-chain gagal.
+ *   2. Event undian yang terlewat (jaring pengaman kalau listener live-nya
+ *      diam-diam mati karena koneksi RPC putus tanpa error).
+ *   3. Saldo Treasury menipis — penyebab paling umum dari nomor 1.
+ */
+function startRecoveryCron() {
+  const intervalMs = config.cron.recoveryIntervalMs;
+  const tick = async () => {
+    try {
+      await svc.retryFailedPayments();
+    } catch (e) {
+      console.error("[cron] retryFailedPayments gagal:", e.message);
+    }
+    if (storeMode === "supabase") {
+      try {
+        await svc.backfillRoundDrawn();
+      } catch (e) {
+        console.error("[cron] backfillRoundDrawn gagal:", e.message);
+      }
+    }
+    try {
+      await svc.checkTreasuryHealth();
+    } catch (e) {
+      console.error("[cron] checkTreasuryHealth gagal:", e.message);
+    }
+  };
+  setInterval(() => void tick(), intervalMs);
+  console.log(`[cron] pemulihan (retry + backfill + saldo) tiap ${Math.round(intervalMs / 60000)} menit.`);
 }
 
 process.once("SIGINT", () => bot.stop("SIGINT"));

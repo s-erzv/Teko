@@ -129,15 +129,64 @@ export async function requestDraw(groupId) {
  */
 export function onRoundDrawn(handler) {
   teko.on("RoundDrawn", (groupId, round, winner, prize, fee, event) => {
-    handler({
-      groupId: Number(groupId),
-      round: Number(round),
-      winner,
-      prizeIdr: unitsToIdr(prize),
-      feeIdr: unitsToIdr(fee),
-      txHash: event.log.transactionHash,
-    });
+    handler(_roundDrawnPayload({ groupId, round, winner, prize, fee }, event.log));
   });
+}
+
+/** Bentuk payload RoundDrawn yang sama persis buat listener live & backfill. */
+function _roundDrawnPayload(args, log) {
+  return {
+    groupId: Number(args.groupId),
+    round: Number(args.round),
+    winner: args.winner,
+    prizeIdr: unitsToIdr(args.prize),
+    feeIdr: unitsToIdr(args.fee),
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    // Kunci idempotensi: satu log on-chain = satu (txHash, logIndex). Dipakai
+    // store.claimEvent biar backfill dan listener live tidak memproses
+    // pemenang yang sama dua kali.
+    eventKey: `${log.transactionHash}:${log.index}`,
+  };
+}
+
+export const currentBlock = () => provider.getBlockNumber();
+
+/**
+ * Pindai event `RoundDrawn` yang terlewat antara `fromBlock` dan `toBlock`.
+ *
+ * Listener live saja TIDAK cukup: fulfillment VRF adalah transaksi terpisah
+ * yang dikirim Chainlink kapan saja, termasuk saat proses bot mati atau lagi
+ * restart. Tanpa pemindaian ulang ini, pemenangnya tidak pernah diumumkan dan
+ * hadiahnya tidak pernah disapu — nyangkut di wallet custodial tanpa jejak.
+ *
+ * Dipecah per `CHUNK` blok karena RPC publik BSC menolak rentang eth_getLogs
+ * yang lebar.
+ */
+export async function scanRoundDrawn(fromBlock, toBlock) {
+  const CHUNK = 2000;
+  const filter = teko.filters.RoundDrawn();
+  const out = [];
+  for (let start = fromBlock; start <= toBlock; start += CHUNK) {
+    const end = Math.min(start + CHUNK - 1, toBlock);
+    const logs = await teko.queryFilter(filter, start, end);
+    for (const log of logs) out.push(_roundDrawnPayload(log.args, log));
+  }
+  return out;
+}
+
+/**
+ * Saldo operasional Treasury. IDRX dipakai buat mengkreditkan setoran member
+ * on-chain, BNB buat gas (termasuk top-up wallet custodial sebelum sweep).
+ * Kalau salah satunya habis, setiap setoran yang masuk bakal gagal
+ * dikreditkan padahal uang fiat user sudah tertagih.
+ */
+export async function treasuryBalances() {
+  const [idrxUnits, bnbWei] = await Promise.all([
+    idrx.balanceOf(treasury.address),
+    provider.getBalance(treasury.address),
+  ]);
+  return { idrxIdr: unitsToIdr(idrxUnits), bnbWei };
 }
 
 /** Denda member yang telat setor ronde berjalan. Permissionless di kontrak,
@@ -320,6 +369,26 @@ export async function hasWon(groupId, memberAddress) {
 export async function reputationScore(memberAddress) {
   if (!reputationContract) return null;
   return Number(await reputationContract.score(memberAddress));
+}
+
+/**
+ * Skor + hitungan mentahnya (tepat waktu / telat / gagal bayar). Skornya
+ * sendiri tidak banyak arti tanpa angka mentah ini — 0 bisa berarti "belum
+ * pernah arisan" atau "selalu nunggak", dua hal yang sangat berbeda.
+ * @returns {Promise<null|{score:number, onTime:number, late:number, defaulted:number}>}
+ */
+export async function reputationOf(memberAddress) {
+  if (!reputationContract) return null;
+  const [score, rec] = await Promise.all([
+    reputationContract.score(memberAddress),
+    reputationContract.record(memberAddress),
+  ]);
+  return {
+    score: Number(score),
+    onTime: Number(rec.onTime),
+    late: Number(rec.late),
+    defaulted: Number(rec.defaulted),
+  };
 }
 
 export { teko, idrx };

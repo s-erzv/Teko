@@ -37,4 +37,38 @@ pnpm dev
 
 Env yang dibutuhkan ada di `bot/.env.example` — Telegram, Groq, BNB Chain (RPC + alamat kontrak hasil deploy di atas), AWS KMS (enkripsi wallet custodial), Xendit (Invoice + Payout), dan Supabase (opsional; kosong = in-memory store).
 
-Skema database (`bot/supabase/schema.sql` lalu `bot/supabase/rls.sql`) dijalankan manual sekali di SQL Editor Supabase.
+### Database
+
+Instalasi baru: jalankan `bot/supabase/schema.sql` lalu `bot/supabase/rls.sql`
+di SQL Editor Supabase, sekali saja.
+
+Kalau `schema.sql` versi awal SUDAH pernah dijalankan, jalankan juga
+`bot/supabase/migrations/001_resilience.sql` — isinya kolom `members.exited` plus
+tabel `chain_cursor`, `processed_events`, `pending_payouts`, `payouts`, dan
+`pending_dms`. Semuanya idempotent, aman diulang.
+
+Supabase praktis WAJIB buat dipakai beneran. Tanpa itu, store jatuh ke mode
+in-memory dan tiga hal kritis hilang tiap restart: hadiah yang menunggu nomor
+rekening pemenang, antrean resi yang belum terkirim, dan kursor blok yang dipakai
+menyusulkan event undian yang terlewat. Backfill undian ikut dimatikan di mode ini
+supaya tidak mengumumkan ulang ronde lama setiap kali boot.
+
+### Webhook Xendit
+
+Ada DUA URL yang harus didaftarkan di dashboard Xendit, bukan satu:
+
+```
+<PUBLIC_BASE_URL>/xendit/invoice-callback    Settings > Webhooks > Invoices paid
+<PUBLIC_BASE_URL>/xendit/payout-callback     Settings > Webhooks > Payouts
+```
+
+Tanpa yang kedua, pencairan yang ditolak Xendit tidak pernah terlihat: bot cuma
+tahu status "ACCEPTED" yang dikembalikan saat perintahnya dikirim.
+
+### Test
+
+```bash
+cd bot
+npm test          # store, parser Rupiah, parser callback Xendit — tanpa kredensial
+pnpm verify       # dogfood end-to-end ke testnet + sandbox; butuh .env.verify.local
+```

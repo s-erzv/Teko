@@ -1,9 +1,10 @@
+import { ethers } from "ethers";
 import { config, rupiah, esc, idrToUnits } from "./config.js";
 import * as chain from "./chain.js";
 import * as store from "./store.js";
 import { createInvoice, createPayout, resolveChannelCode } from "./xendit.js";
 import { custodialAddress, sweepToTreasury, sweepToExternal } from "./wallet.js";
-import { notify, notifyUser } from "./notifier.js";
+import { notify, notifyUser, notifyAdmins } from "./notifier.js";
 
 /**
  * Cari grup arisan yang relevan buat `userId` — coba dari `chatId` dulu
@@ -163,6 +164,18 @@ export async function onPaymentSettled(orderId, paidAmountIdr) {
   if (paidAmountIdr != null && Math.round(paidAmountIdr) !== Math.round(expected)) {
     console.error(`[settle] nominal tidak cocok untuk ${oid}: diharapkan ${expected}, diterima ${paidAmountIdr}`);
     await store.updatePayment(oid, { status: "amount_mismatch" });
+    await notifyUser(
+      pay.telegram_user_id,
+      `Pembayaranmu buat Arisan #${pay.group_id} nominalnya nggak cocok ` +
+        `(ditagih ${rupiah(expected)}, terbaca ${rupiah(paidAmountIdr)}), jadi belum aku kreditkan. ` +
+        `Admin lagi ngecek — uangmu nggak hilang.`
+    );
+    await notifyAdmins(
+      `Nominal pembayaran tidak cocok.\n` +
+        `• Order: <code>${esc(oid)}</code>\n` +
+        `• Ditagih ${rupiah(expected)}, dibayar ${rupiah(paidAmountIdr)}\n` +
+        `• Arisan #${pay.group_id}, user ${pay.telegram_user_id}`
+    );
     return;
   }
 
@@ -185,8 +198,15 @@ async function _settleContribution(pay, oid) {
     depositTx = r.txHash;
     await store.updatePayment(oid, { tx_hash: depositTx });
   } catch (e) {
-    console.error("[settle] deposit on-chain gagal:", e.message);
-    await store.updatePayment(oid, { status: "deposit_failed" });
+    await _handleSettleFailure({
+      oid,
+      pay,
+      error: e,
+      what: `setoran Ronde ${pay.round}`,
+      userNote:
+        `Pembayaranmu <b>${rupiah((pay.amount_idr || 0) + (pay.fee_idr || 0))}</b> sudah diterima, ` +
+        `tapi pencatatannya on-chain belum berhasil. Uangmu aman dan bakal dicoba ulang otomatis.`,
+    });
     return;
   }
 
@@ -259,8 +279,15 @@ async function _settleDebt(pay, oid) {
       `Utang kamu di Arisan #${pay.group_id} sebesar <b>${rupiah(pay.amount_idr)}</b> sudah lunas. Terima kasih.`
     );
   } catch (e) {
-    console.error("[settle] payDebt gagal:", e.message);
-    await store.updatePayment(oid, { status: "deposit_failed" });
+    await _handleSettleFailure({
+      oid,
+      pay,
+      error: e,
+      what: "pelunasan utang",
+      userNote:
+        `Pembayaran utangmu <b>${rupiah(pay.amount_idr)}</b> sudah diterima, tapi pencatatannya ` +
+        `on-chain belum berhasil. Uangmu aman dan bakal dicoba ulang otomatis.`,
+    });
   }
 }
 
@@ -282,14 +309,53 @@ async function _settlePriority(pay, oid) {
       );
     }
   } catch (e) {
-    console.error("[settle] requestPrioritySwap gagal:", chain.describeError(e));
-    await store.updatePayment(oid, { status: "deposit_failed" });
+    await _handleSettleFailure({
+      oid,
+      pay,
+      error: e,
+      what: "tawaran prioritas",
+      userNote:
+        `Pembayaran tawaran prioritasmu <b>${rupiah(pay.amount_idr)}</b> sudah diterima, tapi ` +
+        `pengajuannya on-chain belum berhasil. Uangmu aman dan bakal dicoba ulang otomatis.`,
+    });
   }
+}
+
+/**
+ * Jalur kegagalan bersama buat ketiga jenis settle. Dulu kegagalan di sini
+ * cuma menulis `deposit_failed` ke DB lalu diam: user sudah membayar uang
+ * sungguhan, tapi tidak ada yang memberitahunya, tidak ada admin yang tahu,
+ * dan tidak ada yang mencoba lagi. Sekarang ketiganya dikerjakan.
+ */
+async function _handleSettleFailure({ oid, pay, error, what, userNote }) {
+  const reason = chain.describeError(error);
+  console.error(`[settle] ${what} gagal untuk ${oid}:`, reason);
+  await store.updatePayment(oid, { status: "deposit_failed" });
+  await notifyUser(pay.telegram_user_id, userNote);
+  await notifyAdmins(
+    `Kredit on-chain GAGAL (${esc(what)}).\n` +
+      `• Order: <code>${esc(oid)}</code>\n` +
+      `• Arisan #${pay.group_id}, user ${pay.telegram_user_id}\n` +
+      `• Nominal: ${rupiah(pay.amount_idr)}\n` +
+      `• Alasan: ${esc(reason)}\n\n` +
+      `Bakal di-retry otomatis. Kalau alasannya soal saldo, isi ulang IDRX/BNB Treasury dulu.`
+  );
 }
 
 /** ID arisan aktif di sebuah grup (untuk bikin deep-link). null bila tak ada. */
 export async function activeGroupId(chatId) {
   const group = await store.getGroupByChat(chatId);
+  return group?.group_id || null;
+}
+
+/**
+ * ID arisan aktif yang relevan buat `userId`, termasuk kalau dipanggil dari
+ * japri (di mana `chatId` adalah chat DM, bukan chat grup arisannya). Dipakai
+ * supaya anggota bisa ketik "bayar" langsung di japri buat ronde berikutnya —
+ * persis seperti yang disuruh pesan pengumuman pemenang.
+ */
+export async function activeGroupIdForUser(chatId, userId) {
+  const group = await resolveGroupForUser(chatId, userId);
   return group?.group_id || null;
 }
 
@@ -331,35 +397,127 @@ export async function requestDraw({ chatId }) {
  * on-chain — bukan dari command handler manapun. Mengumumkan pemenang ke
  * grup Telegram yang benar (dicari dari `groupId`) dan memicu sweep hadiah.
  */
-export async function handleRoundDrawn({ groupId, round, winner, prizeIdr, feeIdr, txHash }) {
-  const group = await store.getGroupById(groupId);
-  const chatId = group?.chat_id || null;
+export async function handleRoundDrawn({
+  groupId,
+  round,
+  winner,
+  prizeIdr,
+  feeIdr,
+  txHash,
+  blockNumber,
+  eventKey,
+}) {
+  // Backfill saat boot dan listener live pasti tumpang tindih di sebagian
+  // event. Klaim atomik ini yang bikin pemenang tidak pernah diproses dua
+  // kali (dua sweep, dua pengumuman, dua pencairan).
+  if (eventKey && !(await store.claimEvent(eventKey, "RoundDrawn"))) return;
 
-  const member = await memberByWallet(groupId, winner);
-  const who = member?.username ? `@${esc(member.username)}` : `pemenang`;
+  // Sweep hadiah adalah satu-satunya efek yang tidak bisa ditarik balik. Sebelum
+  // itu terjadi, kegagalan apa pun berarti klaimnya DILEPAS supaya pemindaian
+  // berikutnya mencoba lagi -- kalau tidak, satu error DB/RPC sesaat bikin
+  // pemenangnya hilang permanen. Sesudahnya klaim ditahan (mengulang sweep cuma
+  // bakal gagal di wallet yang sudah kosong) dan admin yang dikabari.
+  let sweepDone = false;
+  try {
+    const group = await store.getGroupById(groupId);
+    const chatId = group?.chat_id || null;
 
-  const after = await chain.getGroup(groupId);
-  if (after.finished && group) await store.setGroupStatus(groupId, "finished");
+    const member = await memberByWallet(groupId, winner);
+    const who = member?.username ? `@${esc(member.username)}` : `pemenang`;
 
-  if (member) await _handlePrizeSweep({ member, groupId, round, prizeIdr });
+    const after = await chain.getGroup(groupId);
 
-  // Ronde berikutnya (kalau masih ada) udah langsung dibuka di kontrak begitu
-  // `_finishRound` selesai -- gak ada "tombol mulai ronde baru" yang kepencet
-  // siapa pun. Jadi nudge ini SATU-SATUNYA sinyal yang bilang ke anggota
-  // "boleh setor lagi sekarang", makanya digabung ke pesan pemenang.
-  const nextRoundNudge = after.finished
-    ? `\n\nArisan selesai — semua sudah kebagian.`
-    : `\n\nRonde ${round + 1} resmi dibuka — yang belum setor, ketik <b>bayar</b> atau tekan tombol Ikut & Setor lagi ya.`;
+    if (member) {
+      await _handlePrizeSweep({ member, groupId, round, prizeIdr });
+      sweepDone = true;
+    }
 
-  const msg =
-    `<b>Pemenang Ronde ${round} Arisan #${groupId}:</b> ${who}\n` +
-    `• Hadiah: <b>${rupiah(prizeIdr)}</b>\n` +
-    `• Platform fee: ${rupiah(feeIdr)} (1%)\n` +
-    `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>\n\n` +
-    (member ? `${who}, cek <b>japri</b> dari bot buat status pencairan (privat).` : "") +
-    nextRoundNudge;
+    if (after.finished && group) await store.setGroupStatus(groupId, "finished");
 
-  if (chatId) await notify(chatId, msg);
+    // Ronde berikutnya (kalau masih ada) udah langsung dibuka di kontrak begitu
+    // `_finishRound` selesai -- gak ada "tombol mulai ronde baru" yang kepencet
+    // siapa pun. Jadi nudge ini SATU-SATUNYA sinyal yang bilang ke anggota
+    // "boleh setor lagi sekarang", makanya digabung ke pesan pemenang.
+    const nextRoundNudge = after.finished
+      ? `\n\nArisan selesai — semua sudah kebagian.`
+      : `\n\nRonde ${round + 1} resmi dibuka — yang belum setor, ketik <b>bayar</b> atau tekan tombol Ikut & Setor lagi ya.`;
+
+    const msg =
+      `<b>Pemenang Ronde ${round} Arisan #${groupId}:</b> ${who}\n` +
+      `• Hadiah: <b>${rupiah(prizeIdr)}</b>\n` +
+      `• Platform fee: ${rupiah(feeIdr)} (1%)\n` +
+      `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>\n\n` +
+      (member ? `${who}, cek <b>japri</b> dari bot buat status pencairan (privat).` : "") +
+      nextRoundNudge;
+
+    if (chatId) await notify(chatId, msg);
+
+    // Kursor baru dimajukan SETELAH event ini benar-benar tuntas diproses, jadi
+    // crash di tengah jalan berarti pemindaian berikutnya mengulang dari sini
+    // (aman -- `claimEvent` yang menyaring duplikatnya).
+    if (blockNumber != null) await store.setCursor(ROUND_DRAWN_CURSOR, blockNumber);
+  } catch (e) {
+    if (eventKey && !sweepDone) {
+      await store.releaseEvent(eventKey);
+    } else if (eventKey) {
+      await notifyAdmins(
+        `Hadiah Arisan #${groupId} Ronde ${round} SUDAH disapu, tapi langkah sesudahnya gagal.\n` +
+          `Alasan: ${esc(e.message)}\n\n` +
+          `Event-nya tidak bakal diulang otomatis (biar sweep-nya tidak dobel). ` +
+          `Cek pengumuman grup dan status pencairan pemenang secara manual.`
+      );
+    }
+    throw e;
+  }
+}
+
+/** Nama kursor blok buat event RoundDrawn (lihat store.getCursor/setCursor). */
+export const ROUND_DRAWN_CURSOR = "RoundDrawn";
+
+/**
+ * Susulkan semua event `RoundDrawn` yang terjadi selagi bot mati. Dipanggil
+ * sekali saat boot, SEBELUM listener live dipasang.
+ *
+ * Tanpa ini, VRF yang fulfill pas bot restart bikin pemenangnya hilang
+ * permanen: tidak ada pengumuman, hadiah tidak pernah disapu dari wallet
+ * custodial, pencairan tidak pernah jalan.
+ *
+ * @param {number} lookbackBlocks berapa blok ke belakang dipindai kalau belum
+ *        ada kursor sama sekali (deploy baru / DB kosong).
+ */
+export async function backfillRoundDrawn(lookbackBlocks = 50_000) {
+  // Kursor bisa keburu melewati sebuah event yang gagal: kalau event blok 105
+  // sukses lebih dulu dari event blok 103 (urutan listener tidak dijamin) lalu
+  // yang 103 gagal dan klaimnya dilepas, memindai dari 106 bakal melewatkannya.
+  // Makanya selalu mundur sedikit — memindai ulang itu gratis, `claimEvent`
+  // yang menyaring duplikatnya.
+  const SAFETY_BLOCKS = 500;
+  const latest = await chain.currentBlock();
+  const saved = await store.getCursor(ROUND_DRAWN_CURSOR);
+  const from =
+    saved != null ? Math.max(0, saved - SAFETY_BLOCKS) : Math.max(0, latest - lookbackBlocks);
+  if (from > latest) return 0;
+
+  const events = await chain.scanRoundDrawn(from, latest);
+  let handled = 0;
+  for (const ev of events) {
+    try {
+      await handleRoundDrawn(ev);
+      handled += 1;
+    } catch (e) {
+      // Jangan lanjut melewati event yang gagal — kursornya belum maju, jadi
+      // pemindaian berikutnya mencobanya lagi. Berhenti di sini biar urutan
+      // ronde tidak kebalik.
+      console.error(`[backfill] RoundDrawn ${ev.eventKey} gagal:`, e.message);
+      await notifyAdmins(
+        `Backfill undian berhenti di Arisan #${ev.groupId} Ronde ${ev.round}.\n` +
+          `Alasan: ${esc(e.message)}\nSisa event bakal dicoba lagi saat restart berikutnya.`
+      );
+      return handled;
+    }
+  }
+  await store.setCursor(ROUND_DRAWN_CURSOR, latest);
+  return handled;
 }
 
 async function _handlePrizeSweep({ member, groupId, round, prizeIdr }) {
@@ -389,7 +547,11 @@ async function _handlePrizeSweep({ member, groupId, round, prizeIdr }) {
     if (dest) {
       await _payout({ telegramUserId: userId, groupId, round, prizeIdr, dest });
     } else {
-      store.setPendingPayout(userId, { groupId, round, prizeIdr });
+      // Hadiahnya SUDAH pindah ke Treasury di baris atas, jadi catatan "siapa
+      // yang masih harus dibayar berapa" ini ditulis ke DB, bukan ke memori:
+      // restart di antara sini dan balasan pemenang tidak boleh bikin
+      // tagihannya lenyap.
+      await store.setPendingPayout(userId, { groupId, round, prizeIdr });
       await notifyUser(
         userId,
         `Selamat! Kamu menang Arisan #${groupId} Ronde ${round} — hadiah <b>${rupiah(prizeIdr)}</b>.\n` +
@@ -404,11 +566,36 @@ async function _handlePrizeSweep({ member, groupId, round, prizeIdr }) {
       userId,
       `Selamat menang Arisan #${groupId} Ronde ${round}! Ada kendala teknis saat memproses pencairan otomatis — admin akan bantu manual.`
     );
+    await notifyAdmins(
+      `Sweep hadiah GAGAL.\n` +
+        `• Arisan #${groupId} Ronde ${round}\n` +
+        `• Pemenang: ${member.username ? "@" + esc(member.username) : userId} (<code>${esc(member.wallet_address)}</code>)\n` +
+        `• Hadiah: ${rupiah(prizeIdr)}\n` +
+        `• Alasan: ${esc(e.message)}\n\n` +
+        `Dana kemungkinan masih di wallet custodial pemenang. Cek saldo BNB Treasury buat gas top-up.`
+    );
   }
 }
 
+/**
+ * Kirim perintah pencairan ke Xendit DAN catat barisnya di buku besar
+ * `payouts`. Barisnya ditulis DULUAN, sebelum request dikirim: kalau proses
+ * mati tepat setelah Xendit menerima perintahnya, jejaknya tetap ada dan
+ * callback-nya masih punya baris buat dicocokkan.
+ */
 async function _payout({ telegramUserId, groupId, round, prizeIdr, dest }) {
   const referenceId = `teko-payout-g${groupId}-r${round}-u${telegramUserId}-${Date.now().toString(36)}`;
+  await store.savePayout({
+    reference_id: referenceId,
+    telegram_user_id: String(telegramUserId),
+    group_id: groupId,
+    round,
+    amount_idr: prizeIdr,
+    channel_code: dest.channel_code,
+    account_number: dest.account_number,
+    status: "requested",
+  });
+
   try {
     const r = await createPayout({
       referenceId,
@@ -417,17 +604,94 @@ async function _payout({ telegramUserId, groupId, round, prizeIdr, dest }) {
       accountNumber: dest.account_number,
       accountHolderName: dest.account_holder_name,
     });
+    await store.updatePayout(referenceId, { status: "accepted", xendit_id: r.payoutId || null });
     await notifyUser(
       telegramUserId,
-      `Pencairan <b>${rupiah(prizeIdr)}</b> ke <b>${esc(dest.channel_code)} ${esc(dest.account_number)}</b> sedang diproses (status: ${esc(r.status)}).`
+      `Pencairan <b>${rupiah(prizeIdr)}</b> ke <b>${esc(dest.channel_code)} ${esc(dest.account_number)}</b> sedang diproses (status: ${esc(r.status)}).\n` +
+        `Aku kabarin lagi begitu dananya masuk.`
     );
   } catch (e) {
     console.error("[payout] gagal:", e.message);
+    await store.updatePayout(referenceId, { status: "error", failure_reason: e.message });
+    // Hadiah tetap terutang: kembalikan ke antrean supaya pemenang bisa
+    // mengirim ulang rekening (mis. nomornya salah) tanpa campur tangan admin.
+    await store.setPendingPayout(telegramUserId, { groupId, round, prizeIdr });
     await notifyUser(
       telegramUserId,
-      `Pencairan hadiah gagal diproses otomatis. Admin akan bantu manual, mohon tunggu.`
+      `Pencairan <b>${rupiah(prizeIdr)}</b> gagal diproses otomatis.\n` +
+        `Coba balas lagi dengan rekening/e-wallet kamu (pastikan nomornya benar), atau tunggu admin bantu manual.`
+    );
+    await notifyAdmins(
+      `Payout Xendit DITOLAK.\n` +
+        `• Ref: <code>${esc(referenceId)}</code>\n` +
+        `• Arisan #${groupId} Ronde ${round}, ${rupiah(prizeIdr)}\n` +
+        `• Tujuan: ${esc(dest.channel_code)} ${esc(dest.account_number)}\n` +
+        `• Alasan: ${esc(e.message)}`
     );
   }
+}
+
+/**
+ * Dipanggil webhook callback payout Xendit — status akhir sebuah pencairan.
+ * Tanpa ini, sebuah payout yang gagal di sisi Xendit tidak pernah kelihatan:
+ * user terus melihat "sedang diproses" padahal dananya tidak pernah sampai.
+ */
+export async function onPayoutCallback({ referenceId, status, failureCode, xenditId }) {
+  const row = await store.getPayout(referenceId);
+  if (!row) {
+    console.warn("[payout] callback buat referensi tak dikenal:", referenceId);
+    return;
+  }
+  if (row.status === "succeeded" || row.status === "failed") return; // sudah final
+
+  if (status === "succeeded") {
+    await store.updatePayout(referenceId, { status: "succeeded", xendit_id: xenditId || row.xendit_id });
+    await notifyUser(
+      row.telegram_user_id,
+      `Pencairan <b>${rupiah(row.amount_idr)}</b> ke <b>${esc(row.channel_code)} ${esc(row.account_number)}</b> BERHASIL. ` +
+        `Cek saldomu ya. Terima kasih sudah arisan bareng Teko.`
+    );
+    return;
+  }
+
+  await store.updatePayout(referenceId, {
+    status: "failed",
+    failure_reason: failureCode || "unknown",
+    xendit_id: xenditId || row.xendit_id,
+  });
+  // Hadiahnya belum sampai ke pemenang, jadi hutangnya dihidupkan lagi dan
+  // tujuan lama dihapus supaya dia tidak mengulang ke rekening yang ditolak.
+  await store.setPendingPayout(row.telegram_user_id, {
+    groupId: Number(row.group_id),
+    round: Number(row.round),
+    prizeIdr: Number(row.amount_idr),
+  });
+  await notifyUser(
+    row.telegram_user_id,
+    `Pencairan <b>${rupiah(row.amount_idr)}</b> ke <b>${esc(row.channel_code)} ${esc(row.account_number)}</b> DITOLAK ` +
+      `(${esc(failureCode || "alasan tidak disebutkan")}).\n` +
+      `Hadiahmu masih utuh. Balas pesan ini dengan rekening/e-wallet yang lain buat dicoba lagi.`
+  );
+  await notifyAdmins(
+    `Payout GAGAL di Xendit.\n` +
+      `• Ref: <code>${esc(referenceId)}</code>\n` +
+      `• Arisan #${row.group_id} Ronde ${row.round}, ${rupiah(row.amount_idr)}\n` +
+      `• Tujuan: ${esc(row.channel_code)} ${esc(row.account_number)}\n` +
+      `• Kode: ${esc(failureCode || "-")}`
+  );
+}
+
+/** Daftar pencairan yang belum tuntas — buat command rekonsiliasi admin. */
+export async function unsettledPayouts() {
+  const rows = await store.getUnsettledPayouts();
+  if (!rows.length) return { ok: true, message: "Semua pencairan sudah tuntas. 👍" };
+  const lines = rows.map(
+    (r) =>
+      `· <code>${esc(r.reference_id)}</code>\n  Arisan #${r.group_id} R${r.round} · ${rupiah(r.amount_idr)} · ` +
+      `${esc(r.channel_code)} ${esc(r.account_number)} · <b>${esc(r.status)}</b>` +
+      (r.failure_reason ? `\n  Alasan: ${esc(r.failure_reason)}` : "")
+  );
+  return { ok: true, message: `<b>Pencairan belum tuntas (${rows.length})</b>\n\n${lines.join("\n")}` };
 }
 
 /**
@@ -473,7 +737,7 @@ export async function statusArisan({ chatId, isAdmin = false }) {
 
 /** Proses pencairan fiat setelah pemenang mengirim nomor rekening/e-wallet. */
 export async function processPayout(userId, destination) {
-  const pending = store.getPendingPayout(userId);
+  const pending = await store.getPendingPayout(userId);
   if (!pending) return null;
 
   const parts = destination.trim().split(/\s+/);
@@ -494,7 +758,7 @@ export async function processPayout(userId, destination) {
   const dest = { channel_code: channelCode, account_number: accountNumber, account_holder_name: accountHolderName };
 
   await store.setPayoutDestination(userId, dest);
-  store.clearPendingPayout(userId);
+  await store.clearPendingPayout(userId);
 
   await _payout({ telegramUserId: userId, groupId: pending.groupId, round: pending.round, prizeIdr: pending.prizeIdr, dest });
 
@@ -525,6 +789,10 @@ export async function exitArisan({ chatId, userId }) {
 
   try {
     const { refundIdr, debtChargedIdr, txHash } = await chain.exitMember(group.group_id, member.wallet_address);
+    // Baris DB-nya ditandai (bukan dihapus) setelah on-chain sukses — riwayat
+    // pembayarannya masih dipakai buat rekonsiliasi, tapi dia tidak boleh lagi
+    // nongol di roster /status atau kena sapuan denda.
+    await store.markMemberExited(group.group_id, userId);
     if (debtChargedIdr > 0) {
       return {
         ok: true,
@@ -720,6 +988,8 @@ export async function completeReplace({ groupId, oldUserId, newUserId, newUserna
     return { ok: false, message: `Gagal ganti anggota: ${esc(chain.describeError(e))}` };
   }
   await store.addMember({ groupId, telegramUserId: newUserId, username: newUsername, walletAddress: newWallet });
+  // Tanpa ini, yang lama dan penggantinya sama-sama muncul di roster selamanya.
+  await store.markMemberExited(groupId, oldUserId);
 
   return { ok: true, message: `@${esc(newUsername || "Anggota baru")} sekarang mengambil alih slot arisan ini di Arisan #${groupId}.` };
 }
@@ -830,7 +1100,164 @@ export async function sweepAllDeadlines() {
   }
 }
 
+/**
+ * Cocokkan address on-chain ke identitas Telegram. Sengaja termasuk anggota
+ * yang sudah keluar: event lama (mis. RoundDrawn yang baru disusulkan lewat
+ * backfill) bisa menyebut address orang yang keluar setelah event itu, dan
+ * "pemenang" tanpa nama bikin pengumumannya tidak kebaca.
+ */
 async function memberByWallet(groupId, wallet) {
-  const members = await store.getMembers(groupId);
+  const members = await store.getMembers(groupId, { includeExited: true });
   return members.find((m) => m.wallet_address?.toLowerCase() === wallet.toLowerCase()) || null;
+}
+
+// ---------------------------------------------------------------------
+// Pemulihan & kesehatan operasional
+// ---------------------------------------------------------------------
+
+/**
+ * Coba ulang setoran yang uangnya sudah masuk tapi kreditnya on-chain gagal
+ * (`deposit_failed`). Barisnya dikembalikan ke 'pending' lalu dilewatkan
+ * `onPaymentSettled` seperti biasa, jadi klaim atomiknya tetap satu pintu dan
+ * retry tidak bisa balapan sama webhook yang datang telat.
+ *
+ * Pemeriksaan nominal dilewati (`paidAmountIdr` = null) karena baris ini sudah
+ * pernah lolos verifikasi itu waktu webhook pertama datang.
+ */
+export async function retryFailedPayments() {
+  const rows = await store.getRetryablePayments();
+  let ok = 0;
+  for (const row of rows) {
+    const requeued = await store.requeuePayment(row.order_id);
+    if (!requeued) continue; // keburu diproses jalur lain
+    try {
+      await onPaymentSettled(row.order_id, null);
+      const after = await store.getPayment(row.order_id);
+      if (after?.status === "settled") ok += 1;
+    } catch (e) {
+      console.error(`[retry] ${row.order_id} gagal lagi:`, e.message);
+    }
+  }
+  if (rows.length) console.log(`[retry] ${ok}/${rows.length} pembayaran gagal berhasil dikreditkan ulang.`);
+  return { attempted: rows.length, succeeded: ok };
+}
+
+/**
+ * Cek saldo operasional Treasury dan lapor ke admin kalau menipis.
+ *
+ * Ini penyebab paling mungkin di balik `deposit_failed`: setiap setoran member
+ * dikreditkan dengan IDRX milik Treasury, dan setiap sweep hadiah butuh BNB
+ * buat top-up gas wallet custodial. Kalau salah satunya habis, semua setoran
+ * yang masuk gagal dikreditkan padahal uang fiat user sudah tertagih — jauh
+ * lebih baik ketahuan sebelum itu terjadi.
+ *
+ * Ambang IDRX = biaya satu ronde penuh untuk SEMUA grup aktif, yaitu nominal
+ * maksimum yang bisa ditagihkan ke Treasury sebelum ada kesempatan isi ulang.
+ */
+export async function checkTreasuryHealth({ alert = true } = {}) {
+  const { idrxIdr, bnbWei } = await chain.treasuryBalances();
+
+  let requiredIdr = 0;
+  for (const group of await store.getActiveGroups()) {
+    try {
+      const g = await chain.getGroup(group.group_id);
+      if (g.finished) continue;
+      requiredIdr += g.contributionIdr * (g.rosterLocked ? g.activeCount : g.size);
+    } catch {
+      /* grup gak kebaca di chain -> lewati, jangan bikin health check ikut mati */
+    }
+  }
+
+  // Cukup buat ~20 sweep/top-up sebelum benar-benar mentok.
+  const bnbFloorWei = config.chain.sweepGasTopupWei * 20n;
+  const idrxLow = requiredIdr > 0 && idrxIdr < requiredIdr;
+  const bnbLow = bnbWei < bnbFloorWei;
+
+  if (alert && (idrxLow || bnbLow)) {
+    const lines = [];
+    if (idrxLow)
+      lines.push(
+        `• IDRX: ${rupiah(idrxIdr)} — kurang buat 1 ronde penuh semua grup aktif (${rupiah(requiredIdr)}).`
+      );
+    if (bnbLow)
+      lines.push(`• BNB: ${ethers.formatEther(bnbWei)} — tipis buat gas sweep/top-up.`);
+    await notifyAdmins(
+      `Saldo Treasury menipis.\n${lines.join("\n")}\n\n` +
+        `Selama ini kurang, setoran yang masuk bakal gagal dikreditkan on-chain.`
+    );
+  }
+
+  return { idrxIdr, bnbWei, requiredIdr, idrxLow, bnbLow };
+}
+
+/**
+ * Skor reputasi lintas-grup seorang member. Kontraknya sudah merekam
+ * tepat-waktu/telat/gagal-bayar sejak awal, tapi sebelumnya tidak ada satu pun
+ * jalan buat melihatnya dari Telegram.
+ */
+export async function reputationCard({ chatId, userId, targetUsername }) {
+  const group = await resolveGroupForUser(chatId, userId);
+  if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
+
+  const member = targetUsername
+    ? await store.getMemberByUsername(group.group_id, targetUsername)
+    : await store.getMember(group.group_id, userId);
+  if (!member)
+    return {
+      ok: false,
+      message: targetUsername
+        ? `User @${esc(targetUsername)} gak ketemu di arisan ini.`
+        : "Kamu belum ikut arisan ini.",
+    };
+
+  const rep = await chain.reputationOf(member.wallet_address);
+  if (!rep)
+    return { ok: false, message: "Kontrak reputasi belum dipasang (REPUTATION_ADDRESS kosong)." };
+
+  const who = member.username ? `@${esc(member.username)}` : "Kamu";
+  const total = rep.onTime + rep.late + rep.defaulted;
+  const verdict =
+    total === 0
+      ? "Belum ada riwayat — skor dimulai dari 0 dan naik tiap setoran tepat waktu."
+      : rep.score >= 70
+        ? "Rapornya bagus. 👍"
+        : rep.score >= 40
+          ? "Lumayan, tapi masih ada catatan telat."
+          : "Perlu diperbaiki — banyak telat / nunggak.";
+
+  return {
+    ok: true,
+    message:
+      `<b>Reputasi ${who}</b> (berlaku lintas semua arisan)\n` +
+      `Skor: <b>${rep.score}/100</b>\n` +
+      `• Tepat waktu: ${rep.onTime}\n` +
+      `• Telat: ${rep.late}\n` +
+      `• Gagal bayar: ${rep.defaulted}\n\n` +
+      `<i>${verdict}</i>`,
+  };
+}
+
+/**
+ * Tutup paksa grup yang macet (treasury-only, darurat). Sisa pot + reserve
+ * dibagi rata ke anggota yang belum menang — lihat forceClose di kontrak.
+ * Sebelumnya fungsi ini ada di chain.js tapi tidak bisa dipanggil dari mana
+ * pun, jadi satu-satunya jalan keluar grup macet adalah lewat cast manual.
+ */
+export async function forceCloseArisan({ chatId }) {
+  const group = await store.getGroupByChat(chatId);
+  if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
+
+  try {
+    const { txHash } = await chain.forceClose(group.group_id);
+    await store.setGroupStatus(group.group_id, "finished");
+    return {
+      ok: true,
+      message:
+        `<b>Arisan #${group.group_id} ditutup paksa.</b>\n` +
+        `Sisa pot dan cadangan dibagi rata ke anggota yang belum pernah menang.\n` +
+        `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>`,
+    };
+  } catch (e) {
+    return { ok: false, message: `Gagal tutup paksa: ${esc(chain.describeError(e))}` };
+  }
 }

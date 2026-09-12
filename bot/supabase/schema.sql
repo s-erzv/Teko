@@ -18,6 +18,8 @@ create table if not exists members (
   telegram_user_id text not null,
   username         text,
   wallet_address   text not null,
+  exited           boolean not null default false, -- keluar / diganti; barisnya disimpan buat riwayat
+  exited_at        timestamptz,
   created_at       timestamptz not null default now(),
   primary key (group_id, telegram_user_id)
 );
@@ -62,3 +64,57 @@ create table if not exists payout_destinations (
   account_holder_name text,
   updated_at          timestamptz not null default now()
 );
+
+-- Kursor blok per event on-chain. Bot memindai ulang dari sini saat boot supaya
+-- event yang terjadi selagi proses mati (mis. VRF fulfill pas bot restart) tidak
+-- hilang selamanya -- listener live saja tidak cukup.
+create table if not exists chain_cursor (
+  id         text primary key,            -- nama event, mis. 'RoundDrawn'
+  last_block bigint not null,
+  updated_at timestamptz not null default now()
+);
+
+-- Jejak event yang sudah diproses. Backfill dan listener live bisa melihat event
+-- yang SAMA; primary key di sini yang bikin pemrosesan ganda mustahil.
+create table if not exists processed_events (
+  event_key    text primary key,          -- '<txHash>:<logIndex>'
+  kind         text not null,
+  processed_at timestamptz not null default now()
+);
+
+-- Hadiah yang nunggu pemenang membalas nomor rekening (lihat _handlePrizeSweep).
+create table if not exists pending_payouts (
+  telegram_user_id text primary key,
+  group_id         bigint not null references groups(group_id) on delete cascade,
+  round            smallint not null,
+  prize_idr        bigint not null,
+  created_at       timestamptz not null default now()
+);
+
+-- Buku besar pencairan fiat -- satu baris per percobaan payout Xendit, ditulis
+-- SEBELUM request dikirim, lalu dimutakhirkan oleh callback payout.
+create table if not exists payouts (
+  reference_id     text primary key,
+  telegram_user_id text not null,
+  group_id         bigint not null references groups(group_id) on delete cascade,
+  round            smallint not null,
+  amount_idr       bigint not null,
+  channel_code     text not null,
+  account_number   text not null,
+  status           text not null default 'requested', -- requested|accepted|succeeded|failed|error
+  xendit_id        text,
+  failure_reason   text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create index if not exists payouts_status_idx on payouts (status);
+
+-- Antrean DM yang gagal terkirim (user belum pernah /start bot). Isinya resi
+-- pembayaran & pemberitahuan menang, jadi tidak boleh hilang saat proses restart.
+create table if not exists pending_dms (
+  id               bigserial primary key,
+  telegram_user_id text not null,
+  body             text not null,
+  created_at       timestamptz not null default now()
+);
+create index if not exists pending_dms_user_idx on pending_dms (telegram_user_id, id);

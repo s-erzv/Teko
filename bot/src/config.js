@@ -79,6 +79,11 @@ export const config = {
   cron: {
     // Seberapa sering cek deadline semua grup aktif & denda otomatis yang telat.
     deadlineSweepIntervalMs: Number(process.env.DEADLINE_SWEEP_INTERVAL_MINUTES || "30") * 60_000,
+    // Seberapa sering coba ulang pembayaran yang gagal dikreditkan on-chain,
+    // susulkan event undian yang terlewat, dan cek saldo Treasury. Lebih
+    // rapat dari sweep denda: yang ini menyangkut uang user yang sudah masuk
+    // tapi belum tercatat.
+    recoveryIntervalMs: Number(process.env.RECOVERY_SWEEP_INTERVAL_MINUTES || "10") * 60_000,
   },
 };
 

@@ -22,6 +22,7 @@ Intent yang valid:
 - {"action":"propose_skip","target_username":"<username tanpa @>"}
 - {"action":"propose_kick","target_username":"<username tanpa @>"}
 - {"action":"vote","proposal_id":<int>,"approve":<true|false>}
+- {"action":"reputation","target_username":"<username tanpa @, opsional>"}   // lihat skor reputasi (sendiri kalau target kosong)
 - {"action":"complaint","text":"<ringkasan komplain>"}
 - {"action":"help"}
 - {"action":"none"}       // pesan tidak relevan / obrolan biasa
@@ -43,6 +44,7 @@ Aturan:
 - "usul skip @budi" / "lewati budi ronde ini" => action propose_skip.
 - "usul keluarkan @budi" / "kick budi" => action propose_kick.
 - "setuju 3" / "tolak 3" (ADA nomor proposal) => action vote (proposal_id 3, approve true/false). Beda dari respond_priority/accept_free_swap yang TANPA nomor.
+- "reputasi" / "skor aku berapa" / "rapor aku" => action reputation (target_username kosong). "reputasi @budi" / "skor budi" => action reputation (target_username: "budi").
 - Jawab HANYA JSON valid, tanpa penjelasan, tanpa markdown fence.`;
 
 /**

@@ -1,4 +1,5 @@
-// Jembatan agar modul non-bot (webhook) bisa kirim pesan ke Telegram.
+// Jembatan agar modul non-bot (webhook, cron) bisa kirim pesan ke Telegram.
+import { config } from "./config.js";
 import * as store from "./store.js";
 
 let telegram = null;
@@ -23,7 +24,7 @@ export async function notify(chatId, text, extra = {}) {
 
 /**
  * Kirim DM ke user; kalau gagal (mis. user belum /start bot), pesan diantre
- * dan dikirim otomatis begitu user /start (lihat flushPendingDMs).
+ * di DB dan dikirim otomatis begitu user /start (lihat flushPendingDMs).
  */
 export async function notifyUser(userId, text) {
   if (!telegram) return;
@@ -33,20 +34,53 @@ export async function notifyUser(userId, text) {
       link_preview_options: { is_disabled: true },
     });
   } catch {
-    store.addPendingDM(userId, text);
+    await store.addPendingDM(userId, text);
     console.log(`[notify] DM diantre untuk ${userId} (user belum /start bot)`);
+  }
+}
+
+/**
+ * Lapor ke semua admin (ADMIN_USER_IDS) kalau ada yang butuh tangan manusia —
+ * setoran yang gagal dikreditkan, pencairan yang ditolak Xendit, saldo
+ * Treasury menipis. Tanpa ini kegagalan cuma mendarat di console.error, yang
+ * praktisnya artinya tidak ada yang tahu.
+ */
+export async function notifyAdmins(text) {
+  if (!telegram) return;
+  const ids = config.telegram.adminIds;
+  if (!ids.length) {
+    console.warn("[notify] ADMIN_USER_IDS kosong — peringatan ini tidak terkirim ke siapa pun:", text);
+    return;
+  }
+  for (const id of ids) {
+    try {
+      await telegram.sendMessage(id, `🚨 <b>Perlu perhatian admin</b>\n\n${text}`, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (e) {
+      console.error(`[notify] gagal lapor ke admin ${id}:`, e.message);
+    }
   }
 }
 
 /** Kirim semua DM yang tertunda untuk user (dipanggil saat user /start / chat japri). */
 export async function flushPendingDMs(userId) {
   if (!telegram) return;
-  const msgs = store.takePendingDMs(userId);
-  for (const m of msgs) {
+  let msgs;
+  try {
+    msgs = await store.takePendingDMs(userId);
+  } catch (e) {
+    console.error("[notify] gagal baca antrean DM:", e.message);
+    return;
+  }
+  for (let i = 0; i < msgs.length; i++) {
     try {
-      await telegram.sendMessage(userId, m, { parse_mode: "HTML" });
+      await telegram.sendMessage(userId, msgs[i], { parse_mode: "HTML" });
     } catch {
-      store.addPendingDM(userId, m); // masih gagal → kembalikan ke antrean
+      // Masih gagal → kembalikan SISA antrean (termasuk yang barusan gagal)
+      // dengan urutan utuh, jangan cuma satu pesan itu.
+      for (const rest of msgs.slice(i)) await store.addPendingDM(userId, rest);
       break;
     }
   }

@@ -148,3 +148,32 @@ export async function createPayout({
   }
   return { payoutId: data.id, status: data.status };
 }
+
+/**
+ * Baca notifikasi callback Payouts v2. Bentuknya `{event, data:{...}}` dengan
+ * event `payout.succeeded` / `payout.failed`; sebagian akun lama mengirim
+ * field-nya rata di root, jadi keduanya diterima di sini.
+ *
+ * Tanpa handler ini, sebuah pencairan yang GAGAL di sisi Xendit tidak pernah
+ * terlihat oleh siapa pun: `createPayout` cuma balikin "ACCEPTED", dan itulah
+ * status terakhir yang pernah diketahui bot.
+ *
+ * @returns {{referenceId:string|null, status:"succeeded"|"failed"|null,
+ *            failureCode:string|null, xenditId:string|null}}
+ */
+export function parsePayoutCallback(n) {
+  const d = n?.data && typeof n.data === "object" ? n.data : n || {};
+  const rawEvent = String(n?.event || "").toLowerCase();
+  const rawStatus = String(d.status || "").toUpperCase();
+
+  let status = null;
+  if (rawEvent === "payout.succeeded" || rawStatus === "SUCCEEDED") status = "succeeded";
+  else if (rawEvent === "payout.failed" || rawStatus === "FAILED") status = "failed";
+
+  return {
+    referenceId: d.reference_id || null,
+    status,
+    failureCode: d.failure_code || d.failure_reason || null,
+    xenditId: d.id || null,
+  };
+}

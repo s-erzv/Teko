@@ -1,7 +1,7 @@
 import express from "express";
 import { config } from "./config.js";
-import { verifyCallbackToken, isPaid, paidAmount } from "./xendit.js";
-import { onPaymentSettled } from "./service.js";
+import { verifyCallbackToken, isPaid, paidAmount, parsePayoutCallback } from "./xendit.js";
+import { onPaymentSettled, onPayoutCallback } from "./service.js";
 
 /** Jalankan HTTP server penerima notifikasi Xendit. */
 export function startWebhookServer() {
@@ -36,6 +36,31 @@ export function startWebhookServer() {
     }
   });
 
+  // Status akhir pencairan hadiah (Payouts v2). Xendit cuma menjawab
+  // "ACCEPTED" saat perintahnya dikirim; berhasil atau ditolaknya baru
+  // diketahui lewat callback ini. Tanpa route ini, pencairan yang gagal tidak
+  // pernah terlihat dan pemenang terus melihat "sedang diproses".
+  app.post("/xendit/payout-callback", async (req, res) => {
+    const token = req.headers["x-callback-token"];
+    if (!verifyCallbackToken(token)) {
+      console.warn("[webhook] callback token payout invalid");
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    res.json({ ok: true });
+
+    const parsed = parsePayoutCallback(req.body || {});
+    if (!parsed.referenceId || !parsed.status) {
+      console.log("[webhook] callback payout diabaikan (status belum final):", req.body?.event);
+      return;
+    }
+    try {
+      await onPayoutCallback(parsed);
+    } catch (e) {
+      console.error("[webhook] proses callback payout gagal:", e.message);
+    }
+  });
+
   // Halaman "finish" setelah bayar (opsional, buat redirect user).
   app.get("/paid/finish", (_req, res) =>
     res.send("Pembayaran diproses. Silakan kembali ke Telegram.")
@@ -43,10 +68,10 @@ export function startWebhookServer() {
 
   const server = app.listen(config.webhook.port, () => {
     console.log(`[webhook] server jalan di :${config.webhook.port}`);
-    console.log(`   Set Webhook URL di dashboard Xendit (Invoices > Callbacks) ke:`);
-    console.log(
-      `   ${config.webhook.publicBaseUrl || "https://<ngrok>"}/xendit/invoice-callback`
-    );
+    const base = config.webhook.publicBaseUrl || "https://<ngrok>";
+    console.log(`   Set DUA Webhook URL di dashboard Xendit:`);
+    console.log(`   · Invoices paid   -> ${base}/xendit/invoice-callback`);
+    console.log(`   · Payouts         -> ${base}/xendit/payout-callback`);
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
