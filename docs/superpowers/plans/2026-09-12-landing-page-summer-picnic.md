@@ -607,10 +607,11 @@ import "./globals.css";
 // Next, jadi halaman jadi tidak punya ketergantungan ke Google saat
 // dibuka -- penting karena halaman ini dinilai di jaringan yang tidak
 // kita kendalikan.
+// Fraunces adalah variable font, jadi JANGAN set `weight` maupun `axes`:
+// kombinasi keduanya ditolak next/font saat build. Tanpa keduanya, seluruh
+// rentang berat tersedia lewat CSS `font-weight` biasa.
 const fraunces = Fraunces({
   subsets: ["latin"],
-  weight: ["600", "700"],
-  axes: ["SOFT"],
   variable: "--font-display",
   display: "swap",
 });
@@ -1153,31 +1154,24 @@ git commit -m "feat(web): bagian kenapa on-chain + penutup"
 
 **Files:**
 - Modify: `web/app/globals.css`
-- Modify: `web/app/layout.jsx`
 
 **Interfaces:**
 - Consumes: seluruh komponen dari Task 4 sampai 6
 - Produces: situs ter-deploy dengan URL publik
 
-- [ ] **Step 1: Tambahkan pemolesan responsif dan lompat-ke-konten**
+- [ ] **Step 1: Tambahkan pemolesan responsif dan perbaiki reduced-motion**
 
 Tambahkan di akhir `web/app/globals.css`:
 
 ```css
-.skip {
-  position: absolute;
-  left: -9999px;
-  top: 0;
-  background: var(--paper);
-  color: var(--ink);
-  border: 2px solid var(--ink);
-  padding: 12px 20px;
-  border-radius: 0 0 12px 0;
-  z-index: 10;
-}
-
-.skip:focus {
-  left: 0;
+/* Blok reduced-motion di awal berkas cuma memangkas DURASI transisi, jadi
+   tombolnya tetap melompat saat disorot, cuma tanpa animasi -- yang justru
+   lebih mengagetkan. Pergeserannya sendiri yang harus ditiadakan. */
+@media (prefers-reduced-motion: reduce) {
+  .btn:hover {
+    transform: none;
+    box-shadow: 0 4px 0 var(--ink);
+  }
 }
 
 @media (max-width: 600px) {
@@ -1196,34 +1190,17 @@ svg {
 }
 ```
 
-- [ ] **Step 2: Tambahkan tautan lompat-ke-konten di layout**
-
-Di `web/app/layout.jsx`, ubah isi `<body>` jadi:
-
-```jsx
-  return (
-    <html lang="id" className={`${fraunces.variable} ${inter.variable}`}>
-      <body>
-        <a className="skip" href="#cara-kerja">
-          Lompat ke konten
-        </a>
-        {children}
-      </body>
-    </html>
-  );
-```
-
-- [ ] **Step 3: Periksa di lebar ponsel**
+- [ ] **Step 2: Periksa di lebar ponsel**
 
 Run: `pnpm run dev:web`
 
-Buka `http://localhost:3000`, kecilkan jendela sampai sekitar 380px. Pastikan tidak ada gulir mendatar sama sekali, tombolnya melebar penuh, dan semua kartu jadi satu kolom. Tekan Tab dari paling atas dan pastikan tautan "Lompat ke konten" muncul lebih dulu. Hentikan dengan Ctrl+C.
+Buka `http://localhost:3000`, kecilkan jendela sampai sekitar 380px. Pastikan tidak ada gulir mendatar sama sekali, tombolnya melebar penuh, dan semua kartu jadi satu kolom. Tekan Tab dan pastikan cincin fokus terlihat jelas di tiap tautan dan tombol. Hentikan dengan Ctrl+C.
 
-- [ ] **Step 4: Periksa dengan gerak dimatikan**
+- [ ] **Step 3: Periksa dengan gerak dimatikan**
 
-Di DevTools, buka Rendering lalu setel `prefers-reduced-motion` ke `reduce`. Muat ulang halaman dan pastikan tombol tidak lagi bergeser saat disorot.
+Di DevTools, buka Rendering lalu setel `prefers-reduced-motion` ke `reduce`. Muat ulang halaman dan pastikan tombol benar-benar diam saat disorot, tidak bergeser sama sekali.
 
-- [ ] **Step 5: Jalankan seluruh test repo**
+- [ ] **Step 4: Jalankan seluruh test repo**
 
 Run:
 
@@ -1234,20 +1211,20 @@ forge test
 
 Expected: test bot 25 PASS, test web 5 PASS, test Foundry 26 PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add web/app/
 git commit -m "feat(web): responsif ponsel, lompat-ke-konten, hormati reduced-motion"
 ```
 
-- [ ] **Step 7: Deploy ke Netlify**
+- [ ] **Step 6: Deploy ke Netlify**
 
 Lewat dashboard Netlify, hubungkan repo `s-erzv/teko`. Netlify membaca `netlify.toml`, jadi perintah build dan direktori publish tidak perlu diisi manual. Biarkan base directory kosong supaya build jalan dari root repo.
 
 Setelah deploy pertama selesai, buka URL yang diberikan dan pastikan halamannya tampil sama seperti di lokal.
 
-- [ ] **Step 8: Commit apa pun yang berubah saat deploy**
+- [ ] **Step 7: Commit apa pun yang berubah saat deploy**
 
 ```bash
 git status
