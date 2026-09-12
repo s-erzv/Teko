@@ -17,3 +17,4 @@ graphify-out/
 web/.next/
 web/out/
 node_modules/
+.gstack/
