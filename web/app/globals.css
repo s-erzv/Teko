@@ -119,3 +119,87 @@ body {
   box-shadow: var(--shadow-warm);
   padding: 24px;
 }
+
+/* ── Tipografi ────────────────────────────────────────────────
+   Serif hangat untuk judul, sans netral untuk isi. Keduanya
+   di-host sendiri oleh next/font, tidak menyentuh Google saat
+   halaman dibuka. */
+body {
+  font-family: var(--font-body), system-ui, -apple-system, sans-serif;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display), Georgia, serif;
+  line-height: 1.15;
+  margin: 0 0 16px;
+}
+
+h1 {
+  font-size: clamp(2.2rem, 6vw, 4rem);
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+}
+
+p {
+  margin: 0 0 16px;
+  max-width: 60ch;
+}
+
+.lead {
+  font-size: clamp(1.05rem, 2vw, 1.25rem);
+  color: var(--ink);
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+/* ── Tombol ───────────────────────────────────────────────────
+   Teks SELALU --ink, tidak pernah putih. Putih di atas --sun-600
+   rasionya sekitar 2.1:1; uji kontras di web/test menjaga aturan ini.
+   Bayangan padat tanpa blur bikin tombolnya terasa seperti benda tebal
+   yang bisa ditekan, bukan permukaan datar. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 14px 24px;
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.btn-primary {
+  background: var(--sun-400);
+  box-shadow: 0 4px 0 var(--ink);
+}
+
+.btn-secondary {
+  background: var(--paper);
+  box-shadow: 0 4px 0 var(--ink);
+}
+
+.btn:hover {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 var(--ink);
+}
+
+.btn:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 28px;
+}
