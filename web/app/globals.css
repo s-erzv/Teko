@@ -402,3 +402,13 @@ img,
 svg {
   max-width: 100%;
 }
+
+/* ── 404 ──────────────────────────────────────────────────────
+   Setinggi layar penuh supaya golden hour-nya tetap terbaca sebagai
+   cahaya sore, bukan sebagai pita kuning di atas halaman kosong. */
+.notfound {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  padding-block: 64px;
+}
