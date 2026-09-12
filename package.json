@@ -1,0 +1,14 @@
+{
+  "name": "teko",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build:web": "pnpm --filter teko-web build",
+    "dev:web": "pnpm --filter teko-web dev",
+    "test:web": "pnpm --filter teko-web test",
+    "test:bot": "pnpm --filter teko-bot test",
+    "test": "pnpm run test:bot && pnpm run test:web"
+  }
+}

@@ -1,0 +1,8 @@
+# Build dijalankan dari root repo, bukan dari web/, supaya nanti direktori
+# netlify/functions di Rencana 2 ikut terbaca tanpa path relatif yang aneh.
+[build]
+  command = "pnpm install && pnpm run build:web"
+  publish = "web/out"
+
+[build.environment]
+  NODE_VERSION = "24"

@@ -12,3 +12,8 @@ broadcast/
 
 # Output tool graphify (lokal, gak perlu di-commit)
 graphify-out/
+
+# Next.js (web/)
+web/.next/
+web/out/
+node_modules/
