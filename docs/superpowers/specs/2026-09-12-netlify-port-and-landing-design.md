@@ -48,18 +48,30 @@ Ditulis lebih dulu karena ini inti dari kenapa port-nya layak dikerjakan:
 
 ```
 teko/
-├── package.json              npm workspaces: ["bot", "web"]     BARU
-├── netlify.toml                                                 BARU
+├── package.json              skrip root                          BARU
+├── pnpm-workspace.yaml       packages: bot, web                  BARU
+├── .npmrc                    node-linker=hoisted                 BARU
+├── netlify.toml                                                  BARU
 ├── contracts/ test/ script/  Foundry, tidak disentuh
 ├── bot/src/                  lapisan logika, sebagian besar tetap
 ├── web/                      Next.js statis, landing page        BARU
 └── netlify/functions/        entry point tipis                   BARU
 ```
 
+Proyek ini memakai **pnpm** (`bot/pnpm-lock.yaml` sudah ada), jadi workspace
+dideklarasikan lewat `pnpm-workspace.yaml`, bukan field `workspaces` di
+`package.json`. Satu `pnpm install` di root menyelesaikan dependensi `bot` dan
+`web` sekaligus, dan function bisa mengimpor `bot/src/*` langsung tanpa
+menyalin kode.
+
+**Jebakan pnpm + Netlify Functions.** Secara default pnpm menyusun
+`node_modules` sebagai pohon symlink, dan bundler function Netlify (esbuild)
+bisa gagal menelusurinya sehingga dependensi tidak ikut terbundel. Karena itu
+`.npmrc` di root disetel `node-linker=hoisted` sejak awal, bukan nanti setelah
+deploy pertama gagal dengan error modul tidak ditemukan yang membingungkan.
+
 Build dijalankan dari root repo. `publish` menunjuk ke hasil export statis
-Next.js; `functions` menunjuk ke `netlify/functions`. Workspaces dipakai supaya
-satu `npm install` di root menyelesaikan dependensi `bot` dan `web` sekaligus,
-dan supaya function bisa mengimpor `bot/src/*` langsung tanpa menyalin kode.
+Next.js; `functions` menunjuk ke `netlify/functions`.
 
 ### Inventaris function
 
