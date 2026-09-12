@@ -203,3 +203,47 @@ p {
   gap: 14px;
   margin-top: 28px;
 }
+
+/* ── Grid langkah ─────────────────────────────────────────────
+   auto-fit + minmax bikin jumlah kolom menyesuaikan sendiri tanpa
+   media query: empat kolom di layar lebar, dua di tablet, satu di
+   ponsel. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+  margin-top: 32px;
+  list-style: none;
+  padding: 0;
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--sun-300);
+  border: 2px solid var(--ink);
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.step h3 {
+  font-size: 1.15rem;
+  margin-bottom: 8px;
+}
+
+.step p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink-soft);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
