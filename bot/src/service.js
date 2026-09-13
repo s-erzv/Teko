@@ -1054,6 +1054,18 @@ export async function proposeGovernance({ chatId, kind, targetUserId }) {
   };
 }
 
+// Nama custom error kontrak yang bisa kena pas vote() -> penjelasan manusiawi.
+// Tanpa ini, kegagalan tampil sbg nama Solidity mentah (mis. "SubjectCannotVote")
+// yang gak berarti apa-apa buat orang yang gak baca kontraknya.
+const VOTE_ERROR_MESSAGES = {
+  SubjectCannotVote: "Kamu gak bisa vote buat proposal yang subjeknya kamu sendiri.",
+  AlreadyVoted: "Kamu sudah pernah vote buat proposal ini.",
+  VotingClosed: "Waktu votingnya udah lewat.",
+  ProposalNotFound: "Proposal itu gak ketemu di arisan ini.",
+  AlreadyExecuted: "Proposal ini udah dieksekusi duluan.",
+  NotEligibleVoter: "Kamu belum jadi anggota terdaftar di arisan ini (belum pernah setor).",
+};
+
 export async function castVote({ chatId, userId, proposalId, approve }) {
   const group = await store.getGroupByChat(chatId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
@@ -1063,7 +1075,9 @@ export async function castVote({ chatId, userId, proposalId, approve }) {
   try {
     await chain.vote(group.group_id, proposalId, voter.wallet_address, approve);
   } catch (e) {
-    return { ok: false, message: `Gagal vote: ${esc(chain.describeError(e))}` };
+    const reason = chain.describeError(e);
+    const friendly = VOTE_ERROR_MESSAGES[reason];
+    return { ok: false, message: friendly ? `Gagal vote: ${friendly}` : `Gagal vote: ${esc(reason)}` };
   }
 
   const p = await chain.getProposal(group.group_id, proposalId);
@@ -1076,9 +1090,14 @@ export async function castVote({ chatId, userId, proposalId, approve }) {
       /* mungkin sudah dieksekusi duluan, atau bar berubah — biarkan, admin bisa /eksekusi manual */
     }
   }
+  // Nunjukin DUA angka (setuju & tolak), bukan cuma yesVotes/requiredYes --
+  // yang lama nampilin progress "setuju" doang walau suara yang baru masuk
+  // itu "tolak", jadi kelihatan kayak suara tolaknya gak kehitung.
   return {
     ok: true,
-    message: `Suara kamu (${approve ? "setuju" : "tolak"}) buat proposal #${proposalId} tercatat on-chain. (${p.yesVotes}/${p.requiredYes} suara setuju)${extra}`,
+    message:
+      `Suara kamu (${approve ? "setuju" : "tolak"}) buat proposal #${proposalId} tercatat on-chain.\n` +
+      `Progress: ${p.yesVotes} setuju / ${p.noVotes} tolak (butuh ${p.requiredYes} setuju buat lolos).${extra}`,
   };
 }
 
@@ -1283,17 +1302,104 @@ export async function forceCloseArisan({ chatId }) {
   const group = await store.getGroupByChat(chatId);
   if (!group) return { ok: false, message: "Belum ada arisan aktif di grup ini." };
 
+  // Dibaca SEBELUM forceClose(): sesudahnya paidThisRound & reserveBalance
+  // kontrak sudah dinolkan, tapi `round` tetap -- itu yang dipakai buat
+  // penanda "refund ronde berapa" di catatan pencairan (payouts/pending_payouts),
+  // sama seperti round dicatat buat pencairan hadiah menang biasa.
+  const before = await chain.getGroup(group.group_id);
+
+  let txHash, refundPerMemberIdr;
   try {
-    const { txHash } = await chain.forceClose(group.group_id);
+    ({ txHash, refundPerMemberIdr } = await chain.forceClose(group.group_id));
     await store.setGroupStatus(group.group_id, "finished");
-    return {
-      ok: true,
-      message:
-        `<b>Arisan #${group.group_id} ditutup paksa.</b>\n` +
-        `Sisa pot dan cadangan dibagi rata ke anggota yang belum pernah menang.\n` +
-        `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>`,
-    };
   } catch (e) {
     return { ok: false, message: `Gagal tutup paksa: ${esc(chain.describeError(e))}` };
+  }
+
+  // Titik ini: refund SUDAH terkirim on-chain ke tiap wallet custodial anggota
+  // (tx sudah confirmed) -- itu sebabnya forceCloseArisan tidak pernah
+  // ok:false lagi sesudah sini. Yang tersisa cuma soal PENCAIRAN (nyapu dari
+  // custodial + minta rekening / kirim ke wallet sendiri), persis pipeline
+  // pemenang biasa di _handlePrizeSweep. Kegagalan sweep satu orang dilaporkan
+  // ke admin per-orang, tidak menghentikan yang lain -- dana anggota lain
+  // tidak boleh ikut nyangkut gara-gara satu error.
+  if (refundPerMemberIdr > 0) {
+    const members = await store.getMembers(group.group_id); // sudah exclude yang exited
+    for (const m of members) {
+      // hasWon dicek per member karena kontrak cuma ngirim refund ke yang
+      // BELUM pernah menang -- gagal cek dianggap "sudah menang" (skip),
+      // lebih aman daripada nyapu wallet yang sebenarnya gak kebagian apa-apa.
+      const won = await chain.hasWon(group.group_id, m.wallet_address).catch(() => true);
+      if (won) continue;
+      await _handleForceCloseRefund({ member: m, groupId: group.group_id, round: before.round, refundIdr: refundPerMemberIdr });
+    }
+  }
+
+  return {
+    ok: true,
+    message:
+      `<b>Arisan #${group.group_id} ditutup paksa.</b>\n` +
+      `Sisa pot dan cadangan dibagi rata ke anggota yang belum pernah menang.\n` +
+      `<a href="https://testnet.bscscan.com/tx/${txHash}">Bukti on-chain</a>`,
+  };
+}
+
+/**
+ * Sapu refund tutup-paksa satu anggota keluar dari wallet custodialnya dan
+ * cairkan -- salinan _handlePrizeSweep buat konteks "refund", bukan "menang".
+ * Dipanggil sekali per anggota dari forceCloseArisan(), gagal di sini TIDAK
+ * dilempar balik -- anggota lain harus tetap diproses.
+ */
+async function _handleForceCloseRefund({ member, groupId, round, refundIdr }) {
+  const userId = member.telegram_user_id;
+  try {
+    const wallet = await store.getWallet(userId);
+    if (wallet?.external_address) {
+      const r = await sweepToExternal(
+        userId,
+        wallet.external_address,
+        idrToUnits(refundIdr),
+        chain.provider,
+        chain.treasurySigner
+      );
+      await notifyUser(
+        userId,
+        `Arisan #${groupId} ditutup paksa — refund kamu <b>${rupiah(refundIdr)}</b> (IDRX) sudah dikirim ke wallet kamu sendiri.\n` +
+          `<a href="https://testnet.bscscan.com/tx/${r.txHash}">Bukti on-chain</a>`
+      );
+      return;
+    }
+
+    const r = await sweepToTreasury(userId, idrToUnits(refundIdr), chain.provider, chain.treasurySigner);
+    console.log(`[sweep] refund tutup-paksa ${userId} disapu ke Treasury: ${r.txHash}`);
+
+    const dest = await store.getPayoutDestination(userId);
+    if (dest) {
+      await _payout({ telegramUserId: userId, groupId, round, prizeIdr: refundIdr, dest });
+    } else {
+      // Sama seperti hadiah menang: dana SUDAH pindah ke Treasury, jadi
+      // tagihan "siapa masih harus dibayar berapa" ditulis ke DB -- restart
+      // di antara sini dan balasan anggota tidak boleh bikin ini lenyap.
+      await store.setPendingPayout(userId, { groupId, round, prizeIdr: refundIdr });
+      await notifyUser(
+        userId,
+        `Arisan #${groupId} ditutup paksa — refund kamu <b>${rupiah(refundIdr)}</b>.\n` +
+          `Balas pesan ini dengan rekening/e-wallet buat pencairan.\n` +
+          `Contoh: <code>GoPay 081234567890</code> atau <code>BCA 1234567890</code>\n\n` +
+          `<i>Punya wallet BNB Chain sendiri? Ketik "pakai wallet sendiri 0x..." biar pencairan berikutnya langsung ke situ.</i>`
+      );
+    }
+  } catch (e) {
+    console.error("[sweep] gagal (tutup-paksa):", e.message);
+    await notifyUser(
+      userId,
+      `Arisan #${groupId} ditutup paksa — refund kamu <b>${rupiah(refundIdr)}</b> mengalami kendala teknis saat diproses. Admin akan bantu manual.`
+    );
+    await notifyAdmins(
+      `Refund tutup-paksa GAGAL disapu.\n` +
+        `• Arisan #${groupId}, user ${userId}\n` +
+        `• Nominal: ${rupiah(refundIdr)}\n` +
+        `• Alasan: ${esc(e.message)}`
+    );
   }
 }

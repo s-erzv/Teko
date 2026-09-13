@@ -343,7 +343,13 @@ export async function hasPendingDraw(groupId) {
 export async function forceClose(groupId) {
   const tx = await teko.forceClose(groupId);
   const receipt = await tx.wait();
-  return { txHash: receipt.hash };
+  const args = findEvent(receipt, "ForceClosed");
+  return {
+    txHash: receipt.hash,
+    // 0 kalau eligibleCount == 0 (semua anggota sudah pernah menang / keluar
+    // -- kontrak sengaja skip transfer di kasus itu, lihat forceClose()).
+    refundPerMemberIdr: args ? unitsToIdr(args.refundPerMember) : 0,
+  };
 }
 
 /** Baca ringkasan status grup dari kontrak. */
