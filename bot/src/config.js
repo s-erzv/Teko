@@ -16,6 +16,18 @@ const REQUIRED = [
   "TEKO_AWS_SECRET_ACCESS_KEY",
 ];
 
+/**
+ * Rapikan URL dasar yang datang dari env: buang spasi di ujung dan garis
+ * miring penutup.
+ *
+ * Bukan kerapian kosmetik. Nilai env hampir selalu masuk lewat copy-paste ke
+ * panel hosting, dan satu spasi yang kebawa bikin `${base}/paid/finish`
+ * berubah jadi URL yang tidak valid -- tanpa error, tanpa log. Pernah
+ * kejadian di deployment ini: PUBLIC_BASE_URL kebawa spasi di kedua ujungnya
+ * dan semua success_redirect_url yang dikirim ke Xendit jadi rusak.
+ */
+const baseUrl = (v) => (v || "").trim().replace(/\/+$/, "");
+
 const missing = REQUIRED.filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`❌ Env belum lengkap di .env.local: ${missing.join(", ")}`);
@@ -77,8 +89,15 @@ export const config = {
   },
   webhook: {
     port: Number(process.env.WEBHOOK_PORT || "3000"),
-    // URL publik (mis. ngrok) untuk callback/redirect Xendit. Opsional.
-    publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+    // URL publik tempat server webhook ini bisa dihubungi Xendit (mis. domain
+    // Northflank, atau ngrok waktu ngoprek lokal). Opsional.
+    publicBaseUrl: baseUrl(process.env.PUBLIC_BASE_URL),
+  },
+  web: {
+    // Landing page statis. Dipakai sebagai tujuan redirect setelah user
+    // selesai/gagal bayar (lihat xendit.js) -- SENGAJA beda dari
+    // publicBaseUrl: yang itu server bot, yang ini halaman buat dilihat orang.
+    baseUrl: baseUrl(process.env.WEB_BASE_URL) || "https://tekkoo.netlify.app",
   },
   cron: {
     // Seberapa sering cek deadline semua grup aktif & denda otomatis yang telat.

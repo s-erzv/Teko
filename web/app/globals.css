@@ -1558,3 +1558,18 @@ svg {
   align-items: center;
   padding-block: 64px;
 }
+
+/* Halaman pendaratan setelah kembali dari Xendit (/selesai dan /gagal).
+   Bentuknya sama dengan .notfound: satu blok pendek, ditengahkan. */
+.payreturn {
+  min-height: calc(100vh - 64px);
+  display: flex;
+  align-items: center;
+  padding-block: 64px;
+}
+
+.payreturn-note {
+  margin-top: 18px;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}

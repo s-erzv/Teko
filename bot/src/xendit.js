@@ -33,10 +33,16 @@ export async function createInvoice({ externalId, grossIdr, description = "Setor
     currency: "IDR",
     invoice_duration: 86400, // kadaluarsa 24 jam
     ...(customer?.email ? { payer_email: customer.email } : {}),
-    ...(config.webhook.publicBaseUrl
+    // Dipulangkan ke landing page, bukan ke server bot: halaman di sana
+    // bertema, menjelaskan apa yang terjadi, dan menawarkan tombol balik ke
+    // Telegram. Sukses dan gagal sengaja DIPISAH -- dulu dua-duanya menunjuk
+    // ke /paid/finish yang sama, jadi orang yang pembayarannya gagal ikut
+    // dibilang "pembayaran diproses" lalu menunggu konfirmasi yang tidak akan
+    // pernah datang.
+    ...(config.web.baseUrl
       ? {
-          success_redirect_url: `${config.webhook.publicBaseUrl}/paid/finish`,
-          failure_redirect_url: `${config.webhook.publicBaseUrl}/paid/finish`,
+          success_redirect_url: `${config.web.baseUrl}/selesai`,
+          failure_redirect_url: `${config.web.baseUrl}/gagal`,
         }
       : {}),
   };
