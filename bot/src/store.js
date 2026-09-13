@@ -45,12 +45,19 @@ const mem = {
 };
 
 // ── Groups ────────────────────────────────────────────────────
-export async function saveGroup({ groupId, chatId, size, contributionIdr }) {
+export async function saveGroup({ groupId, chatId, size, contributionIdr, adminUserId }) {
   const row = {
     group_id: groupId,
     chat_id: String(chatId),
     size,
     contribution_idr: contributionIdr,
+    // Siapa yang ngetik "buat arisan" ini -- bukan pengganti ADMIN_USER_IDS
+    // (admin platform tetap bisa di semua grup), tapi bikin pembuatnya bisa
+    // ngurus /denda /draw /tutup_paksa /eksekusi buat arisan SENDIRI tanpa
+    // perlu didaftarin manual ke env. undefined kalau dogfood/skrip lama
+    // yang belum mengirim ini -- grup itu jatuhnya ke admin-platform-only,
+    // sama seperti perilaku sebelum kolom ini ada.
+    admin_user_id: adminUserId != null ? String(adminUserId) : null,
     status: "collecting",
   };
   if (sb) {

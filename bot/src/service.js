@@ -29,7 +29,7 @@ async function resolveGroupForUser(chatId, userId) {
  *        di awal — ronde ke-2 dst cair instan tanpa nunggu VRF lagi).
  * @returns {Promise<{ok:boolean, message:string}>}
  */
-export async function createArisan({ chatId, size, contributionIdr, cycleDays, drawMode }) {
+export async function createArisan({ chatId, size, contributionIdr, cycleDays, drawMode, creatorUserId }) {
   if (!size || size < 2 || size > 50)
     return { ok: false, message: "Jumlah anggota harus 2–50 ya. Contoh: <i>arisan 5 orang 200rb</i>." };
   if (!contributionIdr || contributionIdr < 1000)
@@ -49,7 +49,7 @@ export async function createArisan({ chatId, size, contributionIdr, cycleDays, d
   });
   if (!groupId) return { ok: false, message: "Gagal baca groupId dari transaksi. Coba lagi." };
 
-  await store.saveGroup({ groupId, chatId, size, contributionIdr });
+  await store.saveGroup({ groupId, chatId, size, contributionIdr, adminUserId: creatorUserId });
 
   const cycleDaysUsed = Number(cycleLengthSecs) / 86400;
   const drawModeLabel =
@@ -369,6 +369,19 @@ async function _handleSettleFailure({ oid, pay, error, what, userNote }) {
 export async function activeGroupId(chatId) {
   const group = await store.getGroupByChat(chatId);
   return group?.group_id || null;
+}
+
+/**
+ * Admin PER GRUP: apakah `userId` yang bikin arisan aktif di `chatId`.
+ * Terpisah dari admin platform (ADMIN_USER_IDS di config, dicek duluan di
+ * index.js) -- ini yang bikin pembuat arisan bisa /denda /draw /tutup_paksa
+ * /eksekusi buat arisannya SENDIRI tanpa perlu didaftarin manual ke env.
+ * false (bukan error) kalau belum ada arisan aktif di grup ini, atau grup
+ * lama yang admin_user_id-nya masih NULL (dibuat sebelum kolom ini ada).
+ */
+export async function isGroupAdmin({ chatId, userId }) {
+  const group = await store.getGroupByChat(chatId);
+  return Boolean(group?.admin_user_id) && String(group.admin_user_id) === String(userId);
 }
 
 /**

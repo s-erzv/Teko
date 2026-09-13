@@ -53,7 +53,7 @@ function waitForDraw(groupId, timeoutMs = 5 * 60_000) {
 
 async function main() {
   line("1) Buat arisan (2 orang, 200rb) — createGroup on-chain");
-  const created = await svc.createArisan({ chatId, size: 2, contributionIdr: 200000 });
+  const created = await svc.createArisan({ chatId, size: 2, contributionIdr: 200000, creatorUserId: A.userId });
   console.log(created.message.split("\n")[0], created.ok ? "✅" : "❌");
 
   const group = await store.getGroupByChat(chatId);

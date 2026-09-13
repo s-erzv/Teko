@@ -18,7 +18,18 @@ import { parseInt10, parseRupiah, parseCycleAnswer, parseDrawModeAnswer } from "
 
 const bot = new Telegraf(config.telegram.token);
 
+// Admin PLATFORM: daftar tetap dari env, berlaku di SEMUA grup. Dipakai apa
+// adanya buat operasi yang memang lintas-grup / gak terikat satu arisan
+// (/pencairan, /webhook_paid) -- gak masuk akal dibuka ke admin per-grup
+// karena order_id-nya bisa punya grup lain.
 const isAdmin = (ctx) => config.telegram.adminIds.includes(String(ctx.from?.id));
+
+// Admin buat SATU arisan: admin platform di atas, ATAU orang yang ngetik
+// "buat arisan" di grup ini (svc.isGroupAdmin, lihat service.js). Dulu cuma
+// admin platform yang bisa /denda /draw /tutup_paksa /eksekusi -- kalau
+// grupnya bukan grup admin platform, gak ada SIAPA PUN di grup itu yang bisa
+// jalanin command-command itu, termasuk yang bikin arisannya sendiri.
+const isAdminFor = async (ctx) => isAdmin(ctx) || svc.isGroupAdmin({ chatId: ctx.chat.id, userId: ctx.from?.id });
 
 // Prefilter murah supaya Groq tidak dipanggil di tiap baris obrolan grup.
 const TRIGGER =
@@ -113,6 +124,7 @@ async function askNextCreationQuestion(ctx, state) {
     contributionIdr: state.contributionIdr,
     cycleDays: state.cycleDays === "default" ? undefined : state.cycleDays,
     drawMode: state.drawMode,
+    creatorUserId: ctx.from.id,
   });
   return ctx.reply(r.message, {
     parse_mode: "HTML",
@@ -206,7 +218,7 @@ bot.start(async (ctx) => {
 bot.help((ctx) => ctx.reply(HELP_MESSAGE, { parse_mode: "HTML" }));
 
 bot.command("status", async (ctx) =>
-  reply(ctx, await svc.statusArisan({ chatId: ctx.chat.id, isAdmin: isAdmin(ctx) }))
+  reply(ctx, await svc.statusArisan({ chatId: ctx.chat.id, isAdmin: await isAdminFor(ctx) }))
 );
 
 // Tombol callback lama (pesan lama) → arahkan ke alur japri privat.
@@ -233,7 +245,7 @@ bot.command("pencairan", async (ctx) => {
 // Escape hatch darurat buat grup yang macet. Merusak & tidak bisa dibatalkan,
 // jadi butuh konfirmasi eksplisit di teks command — bukan cuma satu kata.
 bot.command("tutup_paksa", async (ctx) => {
-  if (!isAdmin(ctx)) return ctx.reply("Hanya admin.");
+  if (!(await isAdminFor(ctx))) return ctx.reply("Hanya admin.");
   const gid = await svc.activeGroupId(ctx.chat.id);
   if (!gid) return ctx.reply("Belum ada arisan aktif di grup ini.");
   if (!/\bYA\b/.test(ctx.message.text)) {
@@ -249,17 +261,17 @@ bot.command("tutup_paksa", async (ctx) => {
 });
 
 bot.command("draw", async (ctx) => {
-  if (!isAdmin(ctx)) return ctx.reply("Hanya admin yang bisa mengundi.");
+  if (!(await isAdminFor(ctx))) return ctx.reply("Hanya admin yang bisa mengundi.");
   reply(ctx, await svc.requestDraw({ chatId: ctx.chat.id }));
 });
 
 bot.command("denda", async (ctx) => {
-  if (!isAdmin(ctx)) return ctx.reply("Hanya admin.");
+  if (!(await isAdminFor(ctx))) return ctx.reply("Hanya admin.");
   reply(ctx, await svc.penalizeLateMembers({ chatId: ctx.chat.id }));
 });
 
 bot.command("eksekusi", async (ctx) => {
-  if (!isAdmin(ctx)) return ctx.reply("Hanya admin.");
+  if (!(await isAdminFor(ctx))) return ctx.reply("Hanya admin.");
   const idStr = ctx.message.text.split(/\s+/)[1];
   if (!idStr) return ctx.reply("Format: <code>/eksekusi &lt;id_proposal&gt;</code>", { parse_mode: "HTML" });
   const gid = await svc.activeGroupId(ctx.chat.id);
@@ -327,6 +339,7 @@ bot.on("text", async (ctx) => {
             contributionIdr: intent.contribution_idr,
             cycleDays: intent.cycle_days,
             drawMode: intent.draw_mode,
+            creatorUserId: ctx.from.id,
           });
           return ctx.reply(r.message, {
             parse_mode: "HTML",
@@ -359,10 +372,10 @@ bot.on("text", async (ctx) => {
       }
 
       case "status":
-        return reply(ctx, await svc.statusArisan({ chatId: ctx.chat.id, isAdmin: isAdmin(ctx) }));
+        return reply(ctx, await svc.statusArisan({ chatId: ctx.chat.id, isAdmin: await isAdminFor(ctx) }));
 
       case "draw":
-        if (!isAdmin(ctx)) return ctx.reply("Hanya admin yang bisa mengundi.");
+        if (!(await isAdminFor(ctx))) return ctx.reply("Hanya admin yang bisa mengundi.");
         return reply(ctx, await svc.requestDraw({ chatId: ctx.chat.id }));
 
       case "exit":

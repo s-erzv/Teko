@@ -1,0 +1,23 @@
+-- ═══════════════════════════════════════════════════════════════
+-- Migration 002 — admin per grup, bukan cuma admin platform global
+-- ───────────────────────────────────────────────────────────────
+-- Jalankan di Supabase SQL Editor kalau schema.sql versi awal SUDAH pernah
+-- dijalankan. Deploy baru cukup jalanin schema.sql (isinya sudah termasuk
+-- ini), lalu migration 001, lalu rls.sql.
+--
+-- Aman diulang (idempotent).
+--
+-- Sebelum ini, isAdmin() di bot cuma ngecek satu daftar global
+-- (ADMIN_USER_IDS) yang berlaku ke SEMUA grup arisan sekaligus, gak peduli
+-- siapa yang bikin arisannya atau siapa yang ada di grup itu. Buat satu
+-- operator (kondisi sekarang) itu gak kerasa, tapi begitu ada grup temen
+-- lain yang bikin arisan sendiri, pembuatnya sendiri gak punya kuasa apa-apa
+-- atas arisan yang dia bikin -- /tutup_paksa, /denda, /eksekusi, /draw
+-- manual mati total buat grup itu kecuali ID-nya didaftarin manual ke env.
+--
+-- Baris yang sudah ada di grup lama akan punya admin_user_id = NULL (arisan
+-- itu tetap cuma bisa dikelola lewat ADMIN_USER_IDS, persis seperti
+-- sebelum migration ini -- tidak ada yang kehilangan akses).
+-- ═══════════════════════════════════════════════════════════════
+
+alter table groups add column if not exists admin_user_id text;

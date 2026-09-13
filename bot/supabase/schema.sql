@@ -7,6 +7,11 @@ create table if not exists groups (
   chat_id          text not null,               -- Telegram chat/group id
   size             smallint not null,
   contribution_idr bigint not null,             -- setoran per orang per ronde (Rupiah)
+  admin_user_id    text,                        -- Telegram user id yang bikin arisan ini;
+                                                 -- boleh pakai /denda, /draw, /tutup_paksa,
+                                                 -- /eksekusi buat grup ini SENDIRI meski dia
+                                                 -- tidak ada di ADMIN_USER_IDS (admin platform
+                                                 -- di ADMIN_USER_IDS tetap bisa di semua grup).
   status           text not null default 'collecting', -- collecting | finished
   created_at       timestamptz not null default now()
 );
