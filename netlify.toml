@@ -6,3 +6,12 @@
 
 [build.environment]
   NODE_VERSION = "24"
+  # Site Netlify ini cuma build web/ (statis, gak baca process.env sama
+  # sekali) tapi env var punya bot (bot/.env.local) ikut ke-attach di
+  # pengaturan site -- secret scanner Netlify jadi salah tangkap angka
+  # konfigurasi biasa (fee, durasi, dst) dan CONTRACT_ADDRESS yang memang
+  # sengaja publik di web/app/links.js. Var beneran sensitif (token bot,
+  # private key treasury, secret Xendit/AWS, dst) TIDAK di-omit di sini,
+  # jadi scan tetap jalan buat itu. Beresin permanen: lepas env var punya
+  # bot dari site Netlify ini di dashboard, karena web/ gak butuh satupun.
+  SECRETS_SCAN_OMIT_KEYS = "WEBHOOK_PORT,GROQ_MODEL,DEFAULT_CYCLE_LENGTH_SECS,BSC_TESTNET_RPC,DEFAULT_PENALTY_PER_DAY_IDR,SWEEP_GAS_TOPUP_BNB,TEKO_AWS_REGION,DEFAULT_POST_PAYOUT_EXIT_PENALTY_IDR,CONVENIENCE_FEE_IDR,DEFAULT_EXIT_PENALTY_IDR,DEFAULT_VOTING_WINDOW_SECS,CONTRACT_ADDRESS"

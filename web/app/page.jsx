@@ -1,16 +1,21 @@
 import Hero from "./components/Hero";
+import Wave from "./components/Wave";
+import Problem from "./components/Problem";
+import ChatDemo from "./components/ChatDemo";
 import HowItWorks from "./components/HowItWorks";
+import Features from "./components/Features";
 import WhyOnchain from "./components/WhyOnchain";
 import Footer from "./components/Footer";
-import Gingham from "./components/Gingham";
 
 export default function Home() {
   return (
-    <main id="konten">
+    <main id="content">
       <Hero />
-      <Gingham />
+      <Wave from="var(--cream)" to="var(--paper)" />
+      <Problem />
+      <ChatDemo />
       <HowItWorks />
-      <Gingham />
+      <Features />
       <WhyOnchain />
       <Footer />
     </main>

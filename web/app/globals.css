@@ -1,9 +1,9 @@
 /* ── Token ────────────────────────────────────────────────────
-   Palet summer picnic. Enam warna matahari dipakai untuk permukaan,
-   blok, dan aksen -- TIDAK untuk teks di atas teks. Tidak satu pun
-   dari enam warna itu cukup gelap untuk dijadikan warna teks, jadi
-   --ink ditambahkan: cokelat tua hangat yang masih terasa satu
-   keluarga dengan matahari terbit tapi kebaca.
+   Enam warna matahari (sun-100..600) dipakai untuk permukaan, blok,
+   dan aksen -- TIDAK untuk teks di atas teks. Tidak satu pun dari
+   enam warna itu cukup gelap untuk dijadikan warna teks, jadi --ink
+   ditambahkan: cokelat tua hangat yang masih terasa satu keluarga
+   tapi kebaca.
 
    Aturan yang dijaga test di web/test/contrast.test.mjs:
    teks SELALU --ink, tidak pernah putih di atas warna sun-*.
@@ -23,9 +23,32 @@
      karena basisnya --ink, bukan abu-abu netral yang bikin halaman
      terasa dingin. */
   --ink-soft: #6B4A2F;
+  --line: rgba(61, 36, 16, 0.16);
 
-  --radius-card: 20px;
-  --shadow-warm: 0 8px 24px rgba(61, 36, 16, 0.10);
+  /* Dua tingkat krem: campuran --paper dengan --sun-100, dibuat opak
+     (bukan rgba) karena dipakai juga sebagai warna "gigi" takik tiket --
+     takik harus benar-benar menutup kartu, jadi tidak boleh tembus.
+     Keduanya lebih terang dari --sun-100, jadi kontras --ink di atasnya
+     lebih longgar daripada ambang yang sudah diuji. */
+  --cream: #FFFBDB;
+  --butter: #FEF7B8;
+
+  /* Warna latar di belakang kartu bertakik. Di-override per section. */
+  --notch-bg: var(--paper);
+
+  --radius-card: 18px;
+  --radius-btn: 999px;
+  --shadow-warm: 0 10px 26px rgba(61, 36, 16, 0.12);
+  --shadow-lift: 0 14px 30px rgba(61, 36, 16, 0.20);
+
+  /* Dipakai washi tape & tekstur gingham -- satu skala dijaga konsisten
+     di semua tempat yang memakainya. */
+  --gingham-size: 10px;
+
+  /* Catatan kecil ala tulisan tangan. Sengaja fallback stack sistem,
+     bukan font Google ketiga -- nol ketergantungan jaringan tambahan
+     buat detail yang murni dekoratif. */
+  --font-hand: "Segoe Print", "Bradley Hand", "Chalkboard SE", "Comic Sans MS", cursive;
 }
 
 * {
@@ -59,70 +82,159 @@ body {
 
 /* ── Tata letak ───────────────────────────────────────────── */
 .wrap {
-  max-width: 1060px;
+  max-width: 1120px;
   margin-inline: auto;
   padding-inline: 20px;
 }
 
 .section {
-  padding-block: clamp(48px, 8vw, 96px);
+  padding-block: clamp(44px, 5.5vw, 76px);
+}
+
+/* Navbar-nya sticky, jadi tanpa ini judul section ketutup begitu
+   tautan anchor di navbar diklik. */
+section[id],
+footer[id] {
+  scroll-margin-top: 76px;
 }
 
 /* ── Golden hour ──────────────────────────────────────────────
    Cahaya sore rendah: paling pekat di bawah, memudar ke atas.
    Arahnya sengaja terbalik dari gradien langit biasa. */
+/* ── Latar hero ───────────────────────────────────────────────
+   Kertas krem polos + butir halus, BUKAN gradien kuning sepenuh layar:
+   gradien besar bikin seluruh hero berteriak dan menenggelamkan tiket
+   yang seharusnya jadi bintangnya. Warnanya sekarang datang dari benda
+   di atasnya (tiket, tombol, pita gingham), bukan dari latarnya. */
 .goldenhour {
-  background:
-    radial-gradient(90% 70% at 50% 100%, var(--sun-400) 0%, transparent 70%),
-    linear-gradient(180deg, var(--sun-100) 0%, var(--sun-200) 45%, var(--sun-300) 100%);
+  position: relative;
+  background-color: var(--cream);
+  background-image:
+    radial-gradient(1.5px 1.5px at 12% 22%, rgba(61, 36, 16, 0.1) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 78% 14%, rgba(61, 36, 16, 0.09) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 32% 62%, rgba(61, 36, 16, 0.08) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 88% 58%, rgba(61, 36, 16, 0.09) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 58% 34%, rgba(61, 36, 16, 0.07) 100%, transparent),
+    radial-gradient(1.5px 1.5px at 6% 82%, rgba(61, 36, 16, 0.08) 100%, transparent),
+    radial-gradient(rgba(61, 36, 16, 0.045) 1px, transparent 1px);
+  background-size: auto, auto, auto, auto, auto, auto, 8px 8px;
 }
 
-/* ── Taplak piknik ────────────────────────────────────────────
-   Gingham asli dibuat dari dua pita semi-transparan yang saling
-   silang: perpotongannya jadi lebih gelap dengan sendirinya,
-   persis seperti kain sungguhan. Dibuat dengan gradient, bukan
-   gambar, supaya tajam di layar mana pun dan nol beban unduh. */
-.gingham {
-  /* Sel HARUS jauh lebih kecil dari tinggi pita. Kalau sel dan pita sama
-     tinggi, cuma satu baris sel yang terlihat dan persilangan dua gradient
-     tidak pernah terbentuk -- hasilnya garis putus-putus, bukan gingham. */
+/* Pita gingham tipis di bibir atas hero -- taplak yang mengintip di
+   balik kertas, cukup untuk menandai tema tanpa mewarnai seisi layar. */
+.goldenhour::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 10px;
   --gingham-size: 14px;
-  background-color: var(--paper);
+  background-color: var(--sun-200);
   background-image:
     repeating-linear-gradient(
       90deg,
-      rgba(255, 154, 0, 0.68) 0 calc(var(--gingham-size) / 2),
+      rgba(255, 154, 0, 0.32) 0 calc(var(--gingham-size) / 2),
       transparent calc(var(--gingham-size) / 2) var(--gingham-size)
     ),
     repeating-linear-gradient(
       0deg,
-      rgba(255, 154, 0, 0.68) 0 calc(var(--gingham-size) / 2),
+      rgba(255, 154, 0, 0.32) 0 calc(var(--gingham-size) / 2),
       transparent calc(var(--gingham-size) / 2) var(--gingham-size)
     );
 }
 
-/* Pita pembatas antar bagian. Gingham dipakai sebagai aksen selebar
-   pita, BUKAN sebagai latar seluruh halaman -- kotak-kotak penuh satu
-   layar bikin mata cepat lelah dan teks di atasnya susah dibaca. */
-.gingham-band {
-  /* ~3 baris sel: cukup untuk membaca anyaman kainnya. */
-  height: 44px;
+.section-cream {
+  background: var(--cream);
+  --notch-bg: var(--cream);
+}
+
+.section-alt {
+  background: var(--butter);
+  --notch-bg: var(--butter);
+}
+
+/* ── Tepi tiket bergerigi ─────────────────────────────────────
+   Setengah lingkaran berwarna latar section dicetak di sisi kiri &
+   kanan kartu, jadi kartunya terbaca seperti karcis yang disobek.
+   Pakai background-gradient, bukan mask: hasilnya sama tapi tidak
+   bergantung dukungan mask-composite yang beda-beda antar browser. */
+.ticket-edge {
+  position: relative;
+}
+
+.ticket-edge::before,
+.ticket-edge::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 9px;
+  background-size: 9px 18px;
+  background-repeat: repeat-y;
+  pointer-events: none;
+}
+
+.ticket-edge::before {
+  left: -1px;
+  background-image: radial-gradient(
+    circle at 0 9px,
+    var(--notch-bg) 6.5px,
+    transparent 7px
+  );
+}
+
+.ticket-edge::after {
+  right: -1px;
+  background-image: radial-gradient(
+    circle at 9px 9px,
+    var(--notch-bg) 6.5px,
+    transparent 7px
+  );
+}
+
+/* ── Gelombang pembatas ───────────────────────────────────────── */
+.wave {
+  line-height: 0;
+}
+
+.wave svg {
+  display: block;
+  width: 100%;
+  height: clamp(38px, 5vw, 72px);
+}
+
+/* Garis "padang bunga" tipis di batas bawah hero -- titik-titik kecil,
+   bukan ilustrasi bunga sungguhan, tapi cukup buat sugesti meadow. */
+.meadow {
+  height: 26px;
+  background-image: radial-gradient(var(--sun-600) 2.5px, transparent 2.5px);
+  background-size: 24px 24px;
+  background-position: 0 8px;
+  opacity: 0.55;
+}
+
+/* ── Paper grain ──────────────────────────────────────────────
+   Tekstur kertas sangat halus lewat dot pattern CSS -- bukan gambar,
+   nol beban unduh. Dipakai di permukaan tiket supaya terasa seperti
+   kertas, bukan blok warna datar. */
+.paper-grain {
+  background-image: radial-gradient(rgba(61, 36, 16, 0.05) 1px, transparent 1px);
+  background-size: 7px 7px;
 }
 
 /* ── Kartu ────────────────────────────────────────────────────
-   Sudut membulat besar dan bayangan hangat rendah: terasa seperti
-   benda yang diletakkan di atas taplak, bukan panel aplikasi. */
+   Border tipis + shadow lembut. */
 .card {
   background: var(--paper);
-  border: 2px solid var(--ink);
+  border: 1px solid var(--line);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-warm);
   padding: 24px;
 }
 
 /* ── Tipografi ────────────────────────────────────────────────
-   Serif hangat untuk judul, sans netral untuk isi. Keduanya
-   di-host sendiri oleh next/font, tidak menyentuh Google saat
+   Serif hangat untuk judul, sans netral untuk isi. Caveat (--font-hand)
+   HANYA untuk catatan kecil dekoratif, tidak pernah untuk konten normal.
+   Ketiganya di-host sendiri oleh next/font, tidak menyentuh Google saat
    halaman dibuka. */
 body {
   font-family: var(--font-body), system-ui, -apple-system, sans-serif;
@@ -135,12 +247,12 @@ h1, h2, h3 {
 }
 
 h1 {
-  font-size: clamp(2.2rem, 6vw, 4rem);
+  font-size: clamp(2.1rem, 5.4vw, 3.4rem);
   letter-spacing: -0.02em;
 }
 
 h2 {
-  font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+  font-size: clamp(1.6rem, 3.5vw, 2.3rem);
 }
 
 p {
@@ -149,7 +261,7 @@ p {
 }
 
 .lead {
-  font-size: clamp(1.05rem, 2vw, 1.25rem);
+  font-size: clamp(1.05rem, 2vw, 1.2rem);
   color: var(--ink);
 }
 
@@ -157,39 +269,66 @@ p {
   color: var(--ink-soft);
 }
 
+/* Coretan bawah tebal di bawah kata kunci pada heading -- gantinya
+   ikon berulang, aksennya jatuh ke tipografi. */
+.accent-underline {
+  background-image: linear-gradient(var(--sun-400), var(--sun-400));
+  background-repeat: no-repeat;
+  background-position: 0 92%;
+  background-size: 100% 10px;
+}
+
+/* Catatan kecil ala tulisan tangan -- dipakai SANGAT hemat, cuma buat
+   detail dekoratif kecil, bukan konten. */
+/* Warnanya --ink-soft, bukan oranye: di atas latar krem yang sekarang,
+   oranye di ukuran teks nyaris tak terbaca. Kesan "tulisan tangan"
+   datang dari bentuk hurufnya, bukan dari warnanya. */
+.doodle {
+  font-family: var(--font-hand), cursive;
+  font-size: 1.35rem;
+  color: var(--ink-soft);
+  line-height: 1.25;
+  margin: 0;
+}
+
 /* ── Tombol ───────────────────────────────────────────────────
    Teks SELALU --ink, tidak pernah putih. Putih di atas --sun-600
-   rasionya sekitar 2.1:1; uji kontras di web/test menjaga aturan ini.
-   Bayangan padat tanpa blur bikin tombolnya terasa seperti benda tebal
-   yang bisa ditekan, bukan permukaan datar. */
+   rasionya sekitar 2.1:1; uji kontras di web/test menjaga aturan ini. */
+/* Bayangan padat tanpa blur + garis tinta: tombolnya terasa seperti benda
+   tebal yang bisa ditekan. Ini gaya yang diminta di referensi. */
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   font-family: var(--font-body), system-ui, sans-serif;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 1rem;
   color: var(--ink);
   text-decoration: none;
-  padding: 14px 24px;
-  border-radius: 999px;
-  border: 2px solid var(--ink);
+  padding: 13px 24px;
+  border-radius: 14px;
+  border: 1.5px solid var(--ink);
+  box-shadow: 0 4px 0 0 var(--ink);
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
 .btn-primary {
-  background: var(--sun-400);
-  box-shadow: 0 4px 0 var(--ink);
+  background: var(--sun-600);
 }
 
 .btn-secondary {
   background: var(--paper);
-  box-shadow: 0 4px 0 var(--ink);
+  border-style: dashed;
 }
 
 .btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 0 0 var(--ink);
+}
+
+.btn:active {
   transform: translateY(2px);
-  box-shadow: 0 2px 0 var(--ink);
+  box-shadow: 0 1px 0 0 var(--ink);
 }
 
 .btn:focus-visible {
@@ -204,35 +343,849 @@ p {
   margin-top: 28px;
 }
 
+/* ── Navbar ───────────────────────────────────────────────────
+   Cream tipis + transparan, nempel di atas saat scroll. Ringan --
+   cuma logo, tiga tautan, satu CTA. */
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: rgba(255, 253, 245, 0.86);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.navbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding-block: 14px;
+}
+
+.wordmark-nav {
+  text-decoration: none;
+  color: inherit;
+  flex-shrink: 0;
+}
+
+.nav-links {
+  display: flex;
+  gap: 30px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.nav-links a {
+  position: relative;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.nav-links a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 2px;
+  background: var(--sun-500);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 150ms ease;
+}
+
+.nav-links a:hover::after {
+  transform: scaleX(1);
+}
+
+.btn-nav {
+  padding: 10px 20px;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+@media (max-width: 780px) {
+  .nav-links {
+    display: none;
+  }
+}
+
+/* ── Wordmark ─────────────────────────────────────────────────
+   Mark + nama, satu benda yang bisa dikenali. */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  font-size: 1.3rem;
+  letter-spacing: -0.01em;
+}
+
+/* ══ Sistem tiket ═══════════════════════════════════════════════
+   Bahasa visual "tiket piknik" dipusatkan cuma di dua tempat yang
+   paling penting -- tiket hero & kartu CTA penutup -- supaya motifnya
+   berarti, bukan diulang sampai encer di setiap kartu. */
+.ticket {
+  position: relative;
+  background: var(--paper);
+  border: 2px solid var(--sun-500);
+  border-radius: 22px;
+  box-shadow: var(--shadow-warm);
+  padding: clamp(20px, 3vw, 28px);
+}
+
+.washi-tape {
+  position: absolute;
+  top: -13px;
+  left: 28px;
+  width: 60px;
+  height: 24px;
+  background-color: var(--sun-300);
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255, 154, 0, 0.55) 0 3px, transparent 3px 7px),
+    repeating-linear-gradient(0deg, rgba(255, 154, 0, 0.55) 0 3px, transparent 3px 7px);
+  opacity: 0.9;
+  transform: rotate(-6deg);
+  border-radius: 2px;
+  box-shadow: 0 3px 6px rgba(61, 36, 16, 0.18);
+}
+
+.ticket-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ticket-brand {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.ticket-no {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  border: 1.5px dashed var(--sun-500);
+  padding: 3px 12px;
+  border-radius: 999px;
+}
+
+.ticket-line {
+  font-family: var(--font-hand), cursive;
+  font-size: clamp(1.4rem, 3vw, 1.8rem);
+  color: var(--ink);
+  margin: 4px 0;
+  line-height: 1.2;
+}
+
+.ticket-line-strong {
+  color: var(--sun-600);
+}
+
+.ticket-sub {
+  margin: 0 0 4px;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.ticket-divider {
+  border-top: 2px dashed var(--sun-400);
+  margin: 20px 0;
+}
+
+.barcode {
+  display: block;
+  width: 100px;
+  height: 30px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--ink) 0 2px,
+    transparent 2px 3px,
+    var(--ink) 3px 4px,
+    transparent 4px 6px,
+    var(--ink) 6px 9px,
+    transparent 9px 11px
+  );
+}
+
+.ticket-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  text-align: right;
+  line-height: 1.3;
+}
+
+.ticket-diamond {
+  width: 9px;
+  height: 9px;
+  background: var(--sun-500);
+  border-radius: 2px;
+  transform: rotate(45deg);
+  flex-shrink: 0;
+}
+
+.ticket:hover {
+  transform: translateY(-3px) rotate(0.3deg);
+  box-shadow: var(--shadow-lift);
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticket:hover {
+    transform: none;
+  }
+}
+
+/* ── Gingham (dipakai hemat, cuma tekstur latar) ────────────────
+   Dua pita semi-transparan bersilang -- perpotongannya gelap sendiri
+   persis kain sungguhan. Skala kecil & opacity rendah supaya jadi
+   tekstur, bukan pola yang bikin mata lelah. */
+.gingham-bg {
+  --gingham-size: 22px;
+  background-color: var(--sun-200);
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 154, 0, 0.3) 0 calc(var(--gingham-size) / 2),
+      transparent calc(var(--gingham-size) / 2) var(--gingham-size)
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 154, 0, 0.3) 0 calc(var(--gingham-size) / 2),
+      transparent calc(var(--gingham-size) / 2) var(--gingham-size)
+    );
+}
+
+/* ── Badge & bukti kecil ──────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: var(--sun-100);
+  border: 1.5px solid var(--sun-400);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  margin-bottom: 18px;
+}
+
+/* Tiga fakta pendek di bawah tombol hero: menjawab keberatan pertama
+   pembaca ("harus punya wallet dong?") sebelum sempat ditanyakan. */
+.proof-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  list-style: none;
+  padding-inline: 0;
+}
+
+.proof-row li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.proof-row .proof-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sun-600);
+  flex-shrink: 0;
+}
+
+/* ── Isi tiket: data betulan, bukan slogan ────────────────────── */
+.ticket-specs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+  padding: 14px;
+  margin: 14px 0;
+  border-radius: 12px;
+  background: var(--cream);
+  border: 1px solid var(--line);
+}
+
+.spec-label {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.spec-value {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.ticket-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--sun-200);
+  border: 1px solid var(--sun-400);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.ticket-status .proof-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sun-600);
+  display: inline-block;
+  margin-right: 6px;
+}
+
+/* ── Stamp: kotak kecil bergaris putus di kaki kartu langkah ────
+   Isinya potongan bukti konkret (balasan bot, logo pembayaran, hash
+   VRF), jadi tiap langkah punya benda nyata, bukan cuma deskripsi. */
+.stamp {
+  margin-top: 16px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: var(--paper);
+  border: 1.5px dashed var(--sun-500);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.stamp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.stamp p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chip {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--sun-200);
+  border: 1px solid var(--sun-400);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* Label kecil di kaki kartu why-on-chain. */
+.reason-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 11px;
+  border-top: 1.5px dashed var(--line);
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+}
+
+/* ── Hero ─────────────────────────────────────────────────────── */
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: clamp(32px, 5vw, 72px);
+  align-items: center;
+}
+
+.hero-highlight {
+  position: relative;
+  display: inline-block;
+}
+
+.hero-spark {
+  position: absolute;
+  top: -14px;
+  right: -20px;
+  color: var(--ink);
+  opacity: 0.75;
+}
+
+.hero-visual {
+  position: relative;
+}
+
+.ticket-hero {
+  max-width: 430px;
+  margin-inline: auto;
+  transform: rotate(-2deg);
+}
+
+.doodle-hero {
+  position: absolute;
+  top: -34px;
+  right: 6%;
+  transform: rotate(-4deg);
+}
+
+@media (max-width: 860px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+  }
+  .doodle-hero {
+    position: static;
+    display: block;
+    text-align: right;
+    margin-bottom: 8px;
+    transform: none;
+  }
+}
+
+/* ── Section head ─────────────────────────────────────────────
+   Judul di kolom kiri, kalimat pengantar di kolom kanan. Sebelumnya
+   keduanya menumpuk di kiri dan menyisakan separuh lebar layar kosong
+   di sebelah judul -- itu yang bikin tiap section terasa melompong. */
+.section-head {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 8px;
+}
+
+@media (min-width: 900px) {
+  .section-head {
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    gap: 56px;
+    align-items: end;
+  }
+}
+
+.section-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+
+.section-intro {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--ink-soft);
+}
+
+.section-mark {
+  color: var(--sun-500);
+}
+
+.doodle-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  transform: rotate(-2deg);
+}
+
+/* ── Flow rail ────────────────────────────────────────────────
+   Jalur uang, disusun vertikal di samping transkrip: kiri apa yang
+   dilihat anggota, kanan apa yang sebenarnya jalan di belakangnya.
+   Garis penyambungnya dibuat dari ::before, bukan elemen terpisah. */
+.flow-rail {
+  margin: 0 0 28px;
+  padding: 0;
+  list-style: none;
+}
+
+.flow-rail li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 18px;
+}
+
+.flow-rail li:last-child {
+  padding-bottom: 0;
+}
+
+.flow-rail li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 19px;
+  top: 42px;
+  height: 16px;
+  width: 2px;
+  background: var(--sun-400);
+}
+
+.flow-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--sun-200);
+  border: 1.5px solid var(--sun-400);
+  color: var(--ink);
+}
+
+.flow-label {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.flow-note {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+/* ── Masalah vs Teko ──────────────────────────────────────────
+   Dua kolom berhadapan: strukturnya sendiri yang bilang "ini
+   perbandingan". Kolom kiri sengaja lebih pudar & bergaris putus --
+   itu keadaan yang mau ditinggalkan, bukan fitur yang dijual. */
+.problem-intro {
+  max-width: 56ch;
+}
+
+.compare {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  margin-top: 32px;
+}
+
+@media (min-width: 820px) {
+  .compare {
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+  }
+}
+
+.compare-col h3 {
+  font-size: 1.05rem;
+  margin-bottom: 14px;
+}
+
+.compare-col ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.compare-col li {
+  font-size: 0.95rem;
+  padding-left: 26px;
+  position: relative;
+  line-height: 1.5;
+}
+
+.compare-before {
+  color: var(--ink-soft);
+}
+
+.compare-before h3 {
+  color: var(--ink-soft);
+}
+
+.compare-before li::before {
+  content: "×";
+  position: absolute;
+  left: 4px;
+  top: -1px;
+  font-size: 1.1rem;
+  color: var(--ink-soft);
+  opacity: 0.75;
+}
+
+.compare-after li::before {
+  content: "✓";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  font-weight: 700;
+  color: var(--sun-600);
+}
+
+@media (min-width: 820px) {
+  .compare-after {
+    border-left: 2px dashed var(--sun-400);
+    padding-left: 28px;
+  }
+}
+
+/* ── Transkrip chat ───────────────────────────────────────────
+   Bentuknya sengaja bukan kartu: ini satu-satunya elemen di halaman
+   yang meniru antarmuka produk aslinya. Gaya daftar pesan (avatar +
+   nama + gelembung), bukan kiri-kanan ala iMessage, karena di sini
+   ada empat orang berbeda -- kiri-kanan malah bikin bingung. */
+.chat-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 28px;
+  align-items: start;
+  margin-top: 30px;
+}
+
+@media (min-width: 940px) {
+  .chat-layout {
+    grid-template-columns: minmax(0, 560px) 1fr;
+    gap: 56px;
+    /* Anotasi ditengahkan terhadap transkrip: kalau dibiarkan start,
+       kolom kanan berhenti jauh di atas dan bawahnya bolong. */
+    align-items: center;
+  }
+}
+
+/* Anotasi di samping transkrip: menyebut ulang momen yang barusan
+   terjadi di chat, jadi pembaca tidak perlu menebak apa yang penting. */
+.chat-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-notes li {
+  border-left: 3px solid var(--sun-400);
+  padding-left: 16px;
+}
+
+.chat-notes h3 {
+  font-size: 1rem;
+  margin-bottom: 5px;
+}
+
+.chat-notes p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.chat-mock {
+  max-width: 580px;
+  background: var(--paper);
+  border: 1.5px solid var(--sun-400);
+  border-radius: 20px;
+  box-shadow: var(--shadow-warm);
+  overflow: hidden;
+}
+
+.chat-mock-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--sun-200);
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-mock-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.chat-mock-sub {
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+}
+
+.chat-mock-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
+
+.chat-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.chat-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.chat-avatar-bot {
+  background: var(--paper);
+  border: 1.5px solid var(--sun-500);
+}
+
+.chat-avatar.tone-1 { background: var(--sun-200); }
+.chat-avatar.tone-2 { background: var(--sun-300); }
+.chat-avatar.tone-3 { background: var(--sun-400); }
+.chat-avatar.tone-4 { background: var(--sun-500); }
+.chat-avatar.tone-5 { background: var(--sun-600); }
+
+.chat-msg-content {
+  min-width: 0;
+}
+
+.chat-msg-name {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-bottom: 3px;
+}
+
+/* Gelembung anggota sengaja polos, gelembung Teko yang berwarna --
+   yang sedang dipamerkan di sini memang suara botnya. */
+.chat-bubble {
+  display: inline-block;
+  margin: 0;
+  max-width: 100%;
+  padding: 9px 14px;
+  border-radius: 4px 14px 14px 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.chat-bubble.bot {
+  background: var(--sun-300);
+  border-color: transparent;
+}
+
+.chat-system {
+  margin: 0;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
 /* ── Grid langkah ─────────────────────────────────────────────
-   auto-fit + minmax bikin jumlah kolom menyesuaikan sendiri tanpa
-   media query: empat kolom di layar lebar, dua di tablet, satu di
-   ponsel. */
+   auto-fit + minmax bikin jumlah kolom menyesuaikan sendiri: empat
+   kolom di layar lebar, dua di tablet, satu di ponsel. */
 .steps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 20px;
+  grid-template-columns: 1fr;
+  gap: 18px;
   margin-top: 32px;
   list-style: none;
   padding: 0;
+}
+
+@media (min-width: 640px) {
+  .steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1000px) {
+  .steps {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Progresi warna dari krem ke oranye lintas keempat langkah -- ritme
+   visual "perjalanan", bukan empat kartu identik berjajar. */
+.step-tone-1 { background: var(--paper); }
+.step-tone-2 { background: var(--sun-100); }
+.step-tone-3 { background: var(--sun-200); }
+.step-tone-4 { background: var(--sun-300); }
+
+/* Kartu sengaja TIDAK dimiringkan: pada grid rapat, kemiringan 1 derajat
+   terbaca sebagai sisi yang tidak lurus, bukan sebagai main-main. Kemiringan
+   disimpan untuk satu tempat saja, tiket hero. */
+.card.step {
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.card.step:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lift);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.step:hover {
+    transform: none;
+  }
+}
+
+.step-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .step-num {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
-  background: var(--sun-300);
-  border: 2px solid var(--ink);
+  background: var(--sun-600);
+  color: var(--paper);
   font-family: var(--font-display), Georgia, serif;
   font-weight: 700;
-  margin-bottom: 12px;
+}
+
+.step-icon {
+  display: inline-flex;
+  color: var(--ink-soft);
 }
 
 .step h3 {
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   margin-bottom: 8px;
 }
 
@@ -242,31 +1195,60 @@ p {
   color: var(--ink-soft);
 }
 
-.section-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 /* ── Daftar alasan ────────────────────────────────────────────
-   Bunga matahari kecil di kiri tiap kartu jadi butir daftar, jadi
-   ikonnya mengerjakan tugas visual sekaligus tugas struktural. */
+   Grid 2x2, chip ikon kecil di kiri tiap kartu, border tipis oranye. */
 .reasons {
   display: grid;
-  /* Dua kolom di layar lebar, bukan tiga: empat alasan di grid tiga kolom
-     menyisakan satu kartu menggantung sendiri di baris kedua. min() di dalam
-     minmax() menjaga trek tidak pernah melebihi lebar layar di ponsel. */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
-  gap: 20px;
+  grid-template-columns: 1fr;
+  gap: 18px;
   margin-top: 32px;
   list-style: none;
   padding: 0;
 }
 
+@media (min-width: 700px) {
+  .reasons {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 .reason {
+  border: 1.5px solid var(--sun-400);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.reason-top {
   display: flex;
-  gap: 14px;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.reason:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lift);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reason:hover {
+    transform: none;
+  }
+}
+
+/* Ikon berada di dalam lingkaran oranye pekat dengan glif warna kertas.
+   Ini ornamen, bukan teks, jadi aturan "teks selalu --ink" tidak berlaku
+   -- dan bentuk glifnya tetap jelas terbaca di ukuran ini. */
+.reason-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--sun-600);
+  color: var(--paper);
 }
 
 .reason h3 {
@@ -280,62 +1262,231 @@ p {
   color: var(--ink-soft);
 }
 
-/* ── Penutup ──────────────────────────────────────────────────
-   Kuning penuh sebagai penutup halaman: sore yang belum habis,
-   bukan footer kelabu. */
-.closing {
+/* ── Fitur ────────────────────────────────────────────────────
+   Sengaja TANPA kotak kartu: kartu sudah dipakai untuk langkah dan
+   alasan. Di sini cuma garis pemisah tipis, supaya daftar terpanjang
+   di halaman ini justru yang paling tenang dan enak dipindai. */
+.feature-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin-top: 26px;
+  list-style: none;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 760px) {
+  .feature-list {
+    grid-template-columns: repeat(2, 1fr);
+    column-gap: 40px;
+  }
+}
+
+.feature-list li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.feature-list-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
   background: var(--sun-200);
-  border-top: 2px solid var(--ink);
+  color: var(--ink);
+}
+
+.feature-list h3 {
+  font-size: 0.98rem;
+  margin-bottom: 4px;
+}
+
+.feature-list p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
+/* ── Penutup / CTA ────────────────────────────────────────────── */
+/* Footer sebelumnya campur sumbu: skema rata kiri, tiket ketengah, tautan
+   ketengah. Sekarang satu grid dua kolom -- skema di kiri, tiket CTA di
+   kanan -- dengan semua isinya rata kiri. */
+.closing {
+  position: relative;
+  border-top: 1px solid var(--line);
+}
+
+.closing-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 36px;
+  align-items: start;
+}
+
+@media (min-width: 980px) {
+  .closing-grid {
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 56px;
+    align-items: center;
+  }
+}
+
+/* ── Skema siklus arisan ──────────────────────────────────────
+   Bagian paling sering ditanya orang yang belum pernah ikut arisan:
+   "terus habis itu gimana?". Lima ronde dijejer eksplisit supaya
+   jelas tiap orang menarik pot tepat sekali. */
+.schema {
+  width: 100%;
+}
+
+.schema p {
+  color: var(--ink-soft);
+}
+
+/* Lima ronde HARUS satu baris: begitu pecah jadi 4+1, skemanya berhenti
+   terbaca sebagai satu siklus utuh. Kolomnya dipaksa lima dan isinya yang
+   mengecil, bukan barisnya yang dipecah. */
+.cycle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 22px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 520px) {
+  .cycle {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.cycle-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 4px;
+}
+
+.cycle-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.cycle-avatar.tone-1 { background: var(--sun-200); }
+.cycle-avatar.tone-2 { background: var(--sun-300); }
+.cycle-avatar.tone-3 { background: var(--sun-400); }
+.cycle-avatar.tone-4 { background: var(--sun-500); }
+.cycle-avatar.tone-5 { background: var(--sun-600); }
+
+.cycle-round {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.cycle-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.cycle-note {
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.ticket-cta {
+  width: 100%;
+}
+
+.washi-tape-cta {
+  left: 40px;
+}
+
+.doodle-cta {
+  margin-top: 18px;
+  transform: rotate(-2deg);
 }
 
 .closing a {
   color: var(--ink);
 }
 
+.closing-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px 40px;
+  margin-top: 44px;
+  padding-top: 26px;
+  border-top: 1.5px dashed var(--line);
+}
+
+.closing-brand {
+  max-width: 42ch;
+}
+
+.closing-brand p {
+  margin: 10px 0 0;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
+.ticket-fineprint {
+  margin: 16px 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
 .linkrow {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 24px;
-  margin-top: 20px;
+  margin: 0;
   padding: 0;
   list-style: none;
   font-size: 0.95rem;
 }
 
-/* ── Wordmark ─────────────────────────────────────────────────
-   Bunga matahari + nama, bukan bunga matahari yang mengambang
-   sendiri di atas judul. Satu benda yang bisa dikenali, bukan dua
-   hiasan terpisah. */
-.wordmark {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-display), Georgia, serif;
-  font-weight: 700;
-  font-size: 1.35rem;
-  letter-spacing: -0.01em;
-  margin-bottom: 28px;
+.closing-note {
+  display: inline-block;
+  margin: 26px 0 0;
+  padding: 7px 14px;
+  border-radius: 10px;
+  background: var(--sun-100);
+  border: 1.5px solid var(--ink);
+  box-shadow: 0 3px 0 0 var(--ink);
+  transform: rotate(-1deg);
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
-/* ── Taplak sebagai alas kartu ────────────────────────────────
-   Kartu langkah diletakkan DI ATAS taplak, bukan di atas kertas
-   kosong. Ini yang bikin bagian tengah halaman masih terasa piknik:
-   tanpa ini dua bagian tengah jadi dua bentang krem tanpa tema, dan
-   kotak-kotaknya cuma muncul sebagai pita tipis antar bagian.
-   Sel dinaikkan ke 18px karena di bidang seluas ini anyaman 14px
-   terbaca sebagai bintik, bukan kain. */
-.blanket {
-  --gingham-size: 18px;
-  margin-top: 32px;
-  padding: 22px;
-  border: 2px solid var(--ink);
-  border-radius: 28px;
-  box-shadow: var(--shadow-warm);
-}
-
-/* Grid di dalam taplak sudah dijarakkan oleh padding taplaknya. */
-.blanket .steps {
-  margin-top: 0;
+/* Panel skema & tiket CTA duduk di atas taplak gingham, jadi takiknya
+   harus sewarna kartu, bukan sewarna pola di belakangnya. */
+.closing .schema {
+  --notch-bg: var(--paper);
+  padding: clamp(20px, 3vw, 30px);
 }
 
 /* ── Lompat ke konten ─────────────────────────────────────────
@@ -345,14 +1496,14 @@ p {
   position: absolute;
   left: 16px;
   top: -60px;
-  z-index: 10;
+  z-index: 40;
   background: var(--paper);
   color: var(--ink);
   font-weight: 600;
   text-decoration: none;
   padding: 12px 18px;
-  border: 2px solid var(--ink);
-  border-radius: 999px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-btn);
   transition: top 120ms ease;
 }
 
@@ -368,33 +1519,28 @@ p {
 @media (prefers-reduced-motion: reduce) {
   .btn:hover {
     transform: none;
-    box-shadow: 0 4px 0 var(--ink);
+    box-shadow: 0 4px 0 0 var(--ink);
   }
   .skiplink {
     transition: none;
   }
 }
 
-/* Break manual di judul hero cuma masuk akal selebar desktop. Di ponsel
-   dia memaksa "yang" turun sendirian jadi baris berisi satu kata; biarkan
-   teksnya mengalir sendiri di situ. */
-@media (max-width: 700px) {
-  .br-lebar {
-    display: none;
-  }
-}
-
 @media (max-width: 600px) {
-  .btn {
+  /* Tombol di dalam halaman melebar penuh, TAPI tombol di navbar tidak --
+     kalau ikut 100% dia mendorong baris navbar dan bikin halaman bisa
+     digeser ke samping. */
+  .btn:not(.btn-nav) {
     width: 100%;
     justify-content: center;
   }
+
+  .btn-nav {
+    padding: 9px 14px;
+    font-size: 0.82rem;
+  }
   .card {
     padding: 20px;
-  }
-  .blanket {
-    padding: 14px;
-    border-radius: 22px;
   }
 }
 
@@ -407,7 +1553,7 @@ svg {
    Setinggi layar penuh supaya golden hour-nya tetap terbaca sebagai
    cahaya sore, bukan sebagai pita kuning di atas halaman kosong. */
 .notfound {
-  min-height: 100vh;
+  min-height: calc(100vh - 64px);
   display: flex;
   align-items: center;
   padding-block: 64px;

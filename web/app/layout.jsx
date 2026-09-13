@@ -1,40 +1,47 @@
-import { Fraunces, Inter } from "next/font/google";
+import localFont from "next/font/local";
+import Navbar from "./components/Navbar";
 import "./globals.css";
 
-// Fraunces: serif hangat dengan sumbu "soft" dan "wonky" -- terasa
-// seperti papan nama pasar tani, cocok untuk golden hour. Inter untuk
-// teks isi. Keduanya diunduh saat BUILD lalu di-host sendiri oleh
-// Next, jadi halaman jadi tidak punya ketergantungan ke Google saat
-// dibuka -- penting karena halaman ini dinilai di jaringan yang tidak
-// kita kendalikan.
-// Fraunces adalah variable font, jadi JANGAN set `weight` maupun `axes`:
-// kombinasi keduanya ditolak next/font saat build. Tanpa keduanya, seluruh
-// rentang berat tersedia lewat CSS `font-weight` biasa.
-const fraunces = Fraunces({
-  subsets: ["latin"],
+// Fraunces (judul) & Inter (isi), keduanya variable font subset latin dan
+// disimpan langsung di app/fonts. Sengaja next/font/local, BUKAN
+// next/font/google: yang versi Google mengunduh font saat build, jadi build
+// ikut gagal setiap kali jaringan ke fonts.gstatic.com bermasalah -- itu
+// pernah kejadian dan memblokir build di sini. File lokal bikin build
+// deterministik, offline-friendly, dan lebih cepat.
+// Catatan kecil ala tulisan tangan (--font-hand di globals.css) memakai
+// fallback cursive sistem, tidak menambah berkas font lagi.
+const fraunces = localFont({
+  src: "./fonts/fraunces-latin.woff2",
+  weight: "100 900",
+  style: "normal",
   variable: "--font-display",
   display: "swap",
+  fallback: ["Georgia", "serif"],
 });
 
-const inter = Inter({
-  subsets: ["latin"],
+const inter = localFont({
+  src: "./fonts/inter-latin.woff2",
+  weight: "100 900",
+  style: "normal",
   variable: "--font-body",
   display: "swap",
+  fallback: ["system-ui", "-apple-system", "sans-serif"],
 });
 
 export const metadata = {
-  title: "Teko — Bendahara Arisan On-Chain",
+  title: "Teko — On-Chain Savings Circle Treasurer",
   description:
-    "Arisan lewat Telegram dengan dana ditahan smart contract BNB Chain dan pemenang diundi Chainlink VRF. Anggota tidak perlu punya wallet.",
+    "A Telegram savings circle with funds held in a BNB Chain smart contract and winners drawn by Chainlink VRF. Members don't need a crypto wallet.",
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="id" className={`${fraunces.variable} ${inter.variable}`}>
+    <html lang="en" className={`${fraunces.variable} ${inter.variable}`}>
       <body>
-        <a className="skiplink" href="#konten">
-          Lompat ke konten
+        <a className="skiplink" href="#content">
+          Skip to content
         </a>
+        <Navbar />
         {children}
       </body>
     </html>

@@ -1,27 +1,26 @@
-import Sunflower from "./components/Sunflower";
+import Logo from "./components/Logo";
 
 /**
  * Netlify menyajikan berkas ini untuk setiap URL yang tidak ada. Tanpa
- * halaman ini, yang muncul adalah 404 bawaan Next: teks bahasa Inggris
- * tanpa tema sama sekali, di situs yang seluruhnya berbahasa Indonesia.
+ * halaman ini, yang muncul adalah 404 bawaan Next: tanpa tema sama sekali.
  */
 export const metadata = {
-  title: "Halaman nggak ketemu — Teko",
+  title: "Page not found — Teko",
 };
 
 export default function NotFound() {
   return (
-    <main className="goldenhour notfound" id="konten">
+    <main className="goldenhour notfound" id="content">
       <div className="wrap">
-        <Sunflower size={56} />
-        <h1>Wah, halamannya nggak ada.</h1>
+        <Logo size={56} />
+        <h1>This page doesn&rsquo;t exist.</h1>
         <p className="lead">
-          Mungkin tautannya salah ketik, atau halamannya sudah pindah.
-          Piknik masih jalan, kok.
+          Maybe the link&rsquo;s mistyped, or the page has moved. Everything
+          else is still running.
         </p>
         <div className="btn-row">
           <a className="btn btn-primary" href="/">
-            Balik ke depan
+            Back to home
           </a>
         </div>
       </div>
