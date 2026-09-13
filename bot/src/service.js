@@ -198,6 +198,29 @@ async function _settleContribution(pay, oid) {
     depositTx = r.txHash;
     await store.updatePayment(oid, { tx_hash: depositTx });
   } catch (e) {
+    // `AlreadyPaid` bukan kegagalan: kontrak bilang setoran ronde ini SUDAH
+    // tercatat. Paling sering muncul kalau user bikin invoice dua kali dan
+    // yang kedua sukses duluan, atau kalau proses bot mati setelah tx masuk
+    // tapi sebelum statusnya sempat ditulis ke DB. Tanpa cabang ini barisnya
+    // nyangkut `deposit_failed` selamanya: tiap putaran cron pemulihan
+    // meretry, ditolak lagi, dan membangunkan admin — padahal tidak ada yang
+    // perlu dikerjakan.
+    //
+    // Tetap dikonfirmasi ke on-chain dulu, dan khusus untuk `pay.round`, BUKAN
+    // ronde yang lagi berjalan: deposit() selalu memakai ronde kontrak saat
+    // ini, jadi setoran buat ronde 2 yang nyasar ke ronde 1 yang sudah lunas
+    // juga bakal bilang AlreadyPaid. Menandainya settled tanpa cek itu berarti
+    // menutup baris yang kewajibannya belum benar-benar terpenuhi.
+    if (chain.isAlreadyPaidError(e)) {
+      const credited = await chain
+        .hasPaidInRound(pay.group_id, pay.round, member.wallet_address)
+        .catch(() => false);
+      if (credited) {
+        console.log(`[settle] ${oid}: AlreadyPaid, terkonfirmasi on-chain -> ditutup sbg settled.`);
+        await store.updatePayment(oid, { status: "settled" });
+        return;
+      }
+    }
     await _handleSettleFailure({
       oid,
       pay,

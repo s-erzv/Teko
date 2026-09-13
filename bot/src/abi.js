@@ -25,6 +25,7 @@ export const TEKO_ABI = [
   "function queue(uint256 groupId) view returns (address[])",
   "function isMember(uint256 groupId, address member) view returns (bool)",
   "function hasWon(uint256 groupId, address member) view returns (bool)",
+  "function paidInRound(uint256 groupId, uint256 round, address member) view returns (bool)",
   "function pendingSwap(uint256 groupId, address target) view returns (address)",
   "function priorityBid(uint256 groupId, address target) view returns (tuple(address requester, uint96 fee))",
   "function groups(uint256) view returns (uint96 contribution, uint8 size, uint8 round, uint8 paidThisRound, uint8 winnersCount, uint8 activeCount, uint8 remainingToWin, bool rosterLocked, bool activated, bool closed, uint8 drawMode, uint64 cycleLengthSecs, uint64 cycleDeadline, uint96 penaltyPerDay, uint96 exitPenalty, uint96 postPayoutExitPenalty, uint16 reserveBps, uint96 reserveBalance)",

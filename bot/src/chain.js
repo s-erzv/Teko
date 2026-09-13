@@ -64,6 +64,22 @@ export function describeError(e) {
   return e?.reason || e?.shortMessage || e?.message || String(e);
 }
 
+/**
+ * True kalau revert-nya `AlreadyPaid` — jawaban kontrak yang artinya setoran
+ * ronde itu SUDAH tercatat. Sengaja dipisah dari describeError() karena
+ * pemanggilnya butuh mengambil KEPUTUSAN dari error ini, bukan sekadar
+ * menampilkannya: AlreadyPaid adalah satu-satunya revert di jalur settle yang
+ * bukan kegagalan, jadi ia tidak boleh ikut di-retry atau dilaporkan ke admin.
+ */
+export function isAlreadyPaidError(e) {
+  return describeError(e).startsWith("AlreadyPaid");
+}
+
+/** Sudahkah `member` tercatat setor di ronde `round` grup ini? */
+export async function hasPaidInRound(groupId, round, member) {
+  return teko.paidInRound(groupId, round, member);
+}
+
 /** Mode undian: 0 = PerCycle (antrian diacak ulang tiap ronde), 1 = Upfront
  *  (urutan tetap sekali ditentukan pas aktivasi, ronde berikutnya cair instan). */
 export const DRAW_MODE_PER_CYCLE = 0;

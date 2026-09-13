@@ -1,0 +1,31 @@
+# Rahasia — JANGAN pernah ikut ke image. Image bisa di-push ke registry dan
+# layer-nya kebaca siapa pun yang bisa narik image itu.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependensi & artefak build; di-install ulang di dalam image.
+**/node_modules
+web/.next
+web/out
+out
+cache
+broadcast
+
+# Gak ada hubungannya sama runtime bot.
+web
+contracts
+script
+test
+lib
+docs
+.git
+.github
+.gstack
+.superpowers
+netlify.toml
+foundry.toml
+foundry.lock
+remappings.txt
+**/*.log
+**/.DS_Store
